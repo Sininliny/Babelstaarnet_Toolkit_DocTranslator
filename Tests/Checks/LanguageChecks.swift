@@ -73,7 +73,7 @@ func runLanguageChecks(_ report: Report) {
         visionRecognitionLanguages: ["xx"],
         scriptCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz"),
         isSpaceSeparated: true,
-        sentenceTerminators: ["."],
+        sentenceRules: SentenceBoundaryRules(stops: ["."]),
         expansionRatio: 0.5...2,
         promptName: "Spaced"
     )

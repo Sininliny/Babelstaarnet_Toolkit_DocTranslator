@@ -167,3 +167,130 @@ func runLayoutChecks(_ report: Report) {
         "ordinary prose is not a list item"
     )
 }
+
+/// The sentence, which is the unit everything downstream works in.
+func runSentenceChecks(_ report: Report) {
+    report.begin("sentences/chinese")
+    let chinese = SimplifiedChinese.language
+    let boundary = chinese.sentenceBoundary
+
+    // The rule the port could not do without: 。 is followed immediately by
+    // the next sentence, and requiring a space after it — which is right for
+    // every language the algorithm was written for — finds no stops at all on
+    // a Chinese page.
+    report.equal(
+        boundary.sentenceRanges(in: "合同期限为三年。罚款为5000元。").count,
+        2,
+        "a full-width stop ends a sentence with nothing after it"
+    )
+    report.equal(
+        boundary.sentenceRanges(in: "一、支付货款；二、支付违约金；").count,
+        2,
+        "so does a full-width semicolon"
+    )
+    // And the ASCII period keeps its guard, because in Chinese text it is
+    // nearly always a decimal point or part of a name.
+    report.equal(
+        boundary.sentenceRanges(in: "利率为3.5%，期限三年。").count,
+        1,
+        "a decimal point is not a sentence stop"
+    )
+    report.expect(
+        boundary.endsSentence("本通知自即日起生效。"),
+        "a line ending in 。 ends a sentence"
+    )
+    report.expect(
+        !boundary.endsSentence("被执行人：王小明"),
+        "and a line with no stop does not"
+    )
+
+    report.begin("sentences/assembly")
+
+    func line(
+        _ text: String,
+        y: Double,
+        height: Double = 0.02
+    ) -> RecognizedLine {
+        RecognizedLine(
+            text: text,
+            box: BlockBox(x: 0.1, y: y, width: 0.8, height: height),
+            confidence: 0.9
+        )
+    }
+
+    // A sentence printed across two wrapped lines is one block; two
+    // sentences on one line are two.
+    let wrapped = BlockAssembly.blocks(
+        from: [
+            line("本院于2024年3月15日立案执行，", y: 0.10),
+            line("依法向你发出本通知。限你于三日内履行。", y: 0.13)
+        ],
+        pageIndex: 0,
+        language: chinese
+    )
+    report.equal(wrapped.count, 2, "the run splits into its two sentences")
+    report.equal(
+        wrapped.first?.text,
+        "本院于2024年3月15日立案执行，依法向你发出本通知。",
+        "the first is assembled across both lines"
+    )
+    report.equal(
+        wrapped.last?.text,
+        "限你于三日内履行。",
+        "and the second is the rest of the second line"
+    )
+
+    // The boxes: a sentence that shares a line takes its share of it, so the
+    // layout-preserving export does not have two blocks erasing the same
+    // pixels.
+    if wrapped.count == 2 {
+        let first = wrapped[0].box
+        let second = wrapped[1].box
+        report.expect(
+            second.minX > first.minX,
+            "the second sentence starts to the right of the first's margin"
+        )
+        report.expect(
+            second.maxX <= first.maxX + 0.001,
+            "and ends no further right than the line does"
+        )
+        report.expect(
+            first.minY < second.minY + 0.001,
+            "the first sentence starts no lower than the second"
+        )
+    }
+
+    report.begin("sentences/type size")
+
+    // The signal this project was missing, and the parent had: a heading is
+    // set larger, and must not be swallowed by the paragraph under it even
+    // when the gap and the column say it could be.
+    let heading = line("关于门禁系统升级的通知", y: 0.10, height: 0.04)
+    let body = line("为加强办公区域安全管理，本院决定升级。", y: 0.15)
+    report.expect(
+        !BlockAssembly.continuesLine(heading, body),
+        "type of a different size is not the same run of text"
+    )
+    report.expect(
+        BlockAssembly.continuesLine(
+            line("为加强办公区域安全管理，", y: 0.15),
+            line("本院决定升级。", y: 0.18)
+        ),
+        "type of the same size, one line apart, is"
+    )
+    report.expect(
+        !BlockAssembly.continuesLine(
+            RecognizedLine(
+                text: "左栏文字",
+                box: BlockBox(x: 0.06, y: 0.15, width: 0.36, height: 0.02),
+                confidence: 0.9
+            ),
+            RecognizedLine(
+                text: "右栏文字",
+                box: BlockBox(x: 0.56, y: 0.18, width: 0.36, height: 0.02),
+                confidence: 0.9
+            )
+        ),
+        "and a line in the next column is not"
+    )
+}

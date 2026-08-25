@@ -26,12 +26,33 @@ public enum SimplifiedChinese {
         return set
     }()
 
-    /// Full-width and CJK stops. A Chinese sentence ends at 。, not at a
-    /// period, and a period inside Chinese text is usually a decimal point or
-    /// part of a Latin abbreviation.
-    public static let sentenceTerminators: Set<Character> = [
-        "。", "！", "？", "；", "…", ".", "!", "?"
-    ]
+    /// Where a Chinese sentence stops.
+    ///
+    /// Three of these rules are exactly the ones the boundary algorithm was
+    /// built to be told rather than to assume:
+    ///
+    /// - **A sentence does not open with a capital.** There are no capitals.
+    ///   This removes the algorithm's strongest signal, so the declaration
+    ///   matters: left at its default it would read every period followed by
+    ///   a Chinese character as a stop inside a token.
+    /// - **A lone letter before a period is not an initial**, because a lone
+    ///   Latin letter in Chinese text is more often a label — 甲 A、乙 B — than
+    ///   somebody's name.
+    /// - **The full-width stops stand alone.** 。 is followed immediately by
+    ///   the next sentence; a space there would be a typesetting error. The
+    ///   ASCII period keeps the whitespace requirement, because in Chinese
+    ///   text it is nearly always a decimal point or part of a URL.
+    public static let sentenceRules = SentenceBoundaryRules(
+        // The Latin abbreviations that turn up inside Chinese documents,
+        // mostly in company names and addresses.
+        abbreviations: ["co", "ltd", "no", "inc", "vs", "etc"],
+        opensWithCapital: false,
+        singleLetterIsInitial: false,
+        stops: ["。", "！", "？", "；", "…", ".", "!", "?"],
+        standAloneStops: ["。", "！", "？", "；", "…"],
+        closers: ["”", "’", "」", "』", "）", "】", "》", "\"", "'", ")", "]"],
+        openers: ["“", "‘", "「", "『", "（", "【", "《", "\"", "'", "(", "["]
+    )
 
     public static let language = SourceLanguage(
         identifier: "zh-Hans",
@@ -46,7 +67,7 @@ public enum SimplifiedChinese {
         visionRecognitionLanguages: ["zh-Hans", "zh-Hant", "en-US"],
         scriptCharacters: scriptCharacters,
         isSpaceSeparated: false,
-        sentenceTerminators: sentenceTerminators,
+        sentenceRules: sentenceRules,
         // One hanzi carries roughly a short English word. Measured loosely
         // and deliberately wide: this band exists to catch a paragraph that
         // came back as one line or as three pages, not to grade prose.

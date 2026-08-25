@@ -41,27 +41,198 @@ public enum BlockAssembly {
         let median = medianHeight(of: kept)
         let grouped = group(ordered, medianHeight: median)
 
-        return grouped.enumerated().map { index, group in
-            let box = group.dropFirst().reduce(group[0].box) {
-                $0.union($1.box)
-            }
-            let text = join(group.map(\.text), language: language)
-            return SourceBlock(
-                pageIndex: pageIndex,
-                order: index,
-                box: box,
-                kind: classify(
-                    group,
-                    box: box,
+        var blocks: [SourceBlock] = []
+        for run in grouped {
+            blocks.append(
+                contentsOf: sentences(
+                    in: run,
+                    pageIndex: pageIndex,
                     medianHeight: median,
-                    language: language
-                ),
-                lines: group.map(\.text),
-                text: text,
-                confidence: group.map(\.confidence).reduce(0, +)
-                    / Double(group.count)
+                    language: language,
+                    from: blocks.count
+                )
             )
         }
+        return blocks
+    }
+
+    /// A run of wrapped lines, cut into sentences.
+    ///
+    /// This is the unit the rest of the app works in, and choosing it is not
+    /// a detail. A recognizer and a vision-language model do not group a page
+    /// the same way: on a court notice with even line spacing, Apple Vision
+    /// returned two blocks — spacing is all it has to go on — while the model
+    /// returned twenty-four, one per printed line. Nothing downstream can
+    /// usefully compare two readings that disagree by a factor of twelve
+    /// about what a block is; the alignment degenerates, the model's blocks
+    /// match nothing, and the app ends up translating the reader that
+    /// invents rather than the one that cannot.
+    ///
+    /// A sentence is the unit both can be brought to. It is also the right
+    /// unit for everything downstream: it is what a translator needs to see
+    /// at once, it is what a confidence score is worth attaching to, and it
+    /// is small enough that a person checking a flagged block can find it on
+    /// the page.
+    ///
+    /// Babelstårnet arrived at the same unit from the other end — it
+    /// assembles a sentence *across* wrapped lines, because bridging a single
+    /// visual line handed readers fragments that began after the subject and
+    /// stopped before the verb.
+    public static func sentences(
+        in run: [RecognizedLine],
+        pageIndex: Int,
+        medianHeight: Double,
+        language: SourceLanguage,
+        from order: Int
+    ) -> [SourceBlock] {
+        guard !run.isEmpty else { return [] }
+        let runBox = run.dropFirst().reduce(run[0].box) { $0.union($1.box) }
+        let runKind = classify(
+            run,
+            box: runBox,
+            medianHeight: medianHeight,
+            language: language
+        )
+        let confidence = run.map(\.confidence).reduce(0, +)
+            / Double(run.count)
+        let (joined, spans) = joinedWithSpans(run, language: language)
+
+        func whole() -> [SourceBlock] {
+            [
+                SourceBlock(
+                    pageIndex: pageIndex,
+                    order: order,
+                    box: runBox,
+                    kind: runKind,
+                    lines: run.map(\.text),
+                    text: joined,
+                    confidence: confidence
+                )
+            ]
+        }
+
+        let ranges = language.sentenceBoundary.sentenceRanges(in: joined)
+        guard ranges.count > 1 else { return whole() }
+
+        let source = joined as NSString
+        var blocks: [SourceBlock] = []
+        for range in ranges {
+            let text = source.substring(with: range)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let covered = spans.filter {
+                NSIntersectionRange($0.range, range).length > 0
+            }
+            guard let box = box(for: range, over: covered) else { continue }
+            // A heading or a page number keeps its kind however many stops it
+            // turned out to contain — those are facts about the whole run.
+            // Being a list item is not: a run that opens with 一、 continues
+            // into sentences that are not items themselves, and inheriting
+            // the run's kind would bullet the paragraph after the list.
+            let kind: BlockKind
+            switch runKind {
+            case .heading, .pageFurniture, .caption, .tableRow:
+                kind = runKind
+            case .paragraph, .listItem:
+                kind = isListItem(text) ? .listItem : .paragraph
+            }
+            blocks.append(
+                SourceBlock(
+                    pageIndex: pageIndex,
+                    order: order + blocks.count,
+                    box: box,
+                    kind: kind,
+                    lines: covered.map { span in
+                        source.substring(
+                            with: NSIntersectionRange(span.range, range)
+                        )
+                    },
+                    text: text,
+                    confidence: confidence
+                )
+            )
+        }
+        return blocks.isEmpty ? whole() : blocks
+    }
+
+    public struct LineSpan {
+        public let line: RecognizedLine
+        /// Where this line's text sits in the joined run.
+        public let range: NSRange
+    }
+
+    /// The run as one string, with each line's place in it, so a sentence
+    /// range can be mapped back onto the page it was printed on.
+    public static func joinedWithSpans(
+        _ run: [RecognizedLine],
+        language: SourceLanguage
+    ) -> (String, [LineSpan]) {
+        var joined = ""
+        var spans: [LineSpan] = []
+        for line in run {
+            if !joined.isEmpty,
+               needsSpace(after: joined, before: line.text, language: language) {
+                joined += " "
+            }
+            let start = (joined as NSString).length
+            joined += line.text
+            let length = (joined as NSString).length - start
+            spans.append(
+                LineSpan(
+                    line: line,
+                    range: NSRange(location: start, length: length)
+                )
+            )
+        }
+        return (joined, spans)
+    }
+
+    /// The box a sentence occupies: the lines it is printed across, and where
+    /// it shares a line with its neighbour, its share of that line.
+    ///
+    /// The share is taken by character count. In a script whose glyphs are
+    /// all one width that is exact; on a Latin line it is an approximation,
+    /// and it is the approximation the layout-preserving export needs so that
+    /// two sentences sharing a line do not each erase the whole of it.
+    public static func box(
+        for range: NSRange,
+        over spans: [LineSpan]
+    ) -> BlockBox? {
+        var box: BlockBox?
+        for span in spans {
+            let shared = NSIntersectionRange(span.range, range)
+            guard shared.length > 0, span.range.length > 0 else { continue }
+            let piece: BlockBox
+            if shared.length == span.range.length {
+                piece = span.line.box
+            } else {
+                let measure = Double(span.range.length)
+                let from = Double(shared.location - span.range.location)
+                    / measure
+                let to = Double(NSMaxRange(shared) - span.range.location)
+                    / measure
+                piece = BlockBox(
+                    x: span.line.box.x + span.line.box.width * from,
+                    y: span.line.box.y,
+                    width: span.line.box.width * (to - from),
+                    height: span.line.box.height
+                )
+            }
+            box = box.map { $0.union(piece) } ?? piece
+        }
+        return box
+    }
+
+    static func needsSpace(
+        after joined: String,
+        before next: String,
+        language: SourceLanguage
+    ) -> Bool {
+        if language.isSpaceSeparated { return true }
+        guard let previous = joined.last, let first = next.first else {
+            return false
+        }
+        return previous.isLatinWordCharacter && first.isLatinWordCharacter
     }
 
     // MARK: - Reading order
@@ -156,14 +327,7 @@ public enum BlockAssembly {
                 groups.append([line])
                 continue
             }
-            let gap = line.box.minY - previous.box.maxY
-            let overlap = line.box.horizontalOverlap(with: previous.box)
-            // A gap of more than about one blank line ends a paragraph, and
-            // so does a line that does not sit under the previous one at all.
-            // The leading multiple is generous because line spacing varies
-            // more between documents than between paragraphs within one.
-            let continues = gap < medianHeight * 0.9 && overlap > 0.35
-            if continues {
+            if continuesLine(previous, line) {
                 current.append(line)
                 groups[groups.count - 1] = current
             } else {
@@ -171,6 +335,39 @@ public enum BlockAssembly {
             }
         }
         return groups
+    }
+
+    /// Whether two lines belong to the same run of text.
+    ///
+    /// Taken from Babelstårnet, whose comment says it best: three things
+    /// separate a wrapped line from the next thing on the page — a gap no
+    /// wider than a line, a column the text shares, and type of the same
+    /// size. The last one is what keeps a heading out of the paragraph
+    /// beneath it, where the first two alone would have accepted it, and it
+    /// is the one this project was missing.
+    public static func continuesLine(
+        _ upper: RecognizedLine,
+        _ lower: RecognizedLine
+    ) -> Bool {
+        let upperBox = upper.box
+        let lowerBox = lower.box
+        guard upperBox.height > 0, lowerBox.height > 0 else { return false }
+
+        let lineHeight = Swift.max(upperBox.height, lowerBox.height)
+        let gap = lowerBox.minY - upperBox.maxY
+        guard gap <= lineHeight * 1.25, gap >= -lineHeight * 0.6 else {
+            return false
+        }
+
+        guard lowerBox.horizontalOverlap(with: upperBox) >= 0.4 else {
+            return false
+        }
+
+        // Vision reports a box that follows whichever ascenders and
+        // descenders the line happens to contain, so same-size type still
+        // varies by a fifth or so either way.
+        let ratio = upperBox.height / lowerBox.height
+        return ratio >= 0.7 && ratio <= 1.45
     }
 
     public static func medianHeight(of lines: [RecognizedLine]) -> Double {

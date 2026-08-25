@@ -129,7 +129,7 @@ public enum PDFTextLayer {
         visionRecognitionLanguages: [],
         scriptCharacters: CharacterSet(),
         isSpaceSeparated: false,
-        sentenceTerminators: [],
+        sentenceRules: SentenceBoundaryRules(stops: []),
         expansionRatio: 0.1...10,
         promptName: "unknown"
     )

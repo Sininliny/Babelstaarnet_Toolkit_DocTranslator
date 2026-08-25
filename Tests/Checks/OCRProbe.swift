@@ -7,6 +7,7 @@ import LanguageChinese
 /// What Apple Vision makes of a page, printed rather than asserted.
 enum OCRProbe {
     static func run() async {
+        boundaryCheck()
         let chinese = SimplifiedChinese.language
         let sizes: [CGFloat] = [30, 40, 52]
         for fontSize in sizes {
@@ -38,7 +39,27 @@ enum OCRProbe {
                 "--- \(Int(fontSize)) px: \(reading?.blocks.count ?? 0) blocks, "
                     + "similarity " + String(format: "%.2f", score) + " ---"
             )
-            print(text.prefix(160).replacingOccurrences(of: "\n", with: " ⏎ "))
+            for block in reading?.blocks ?? [] {
+                print("   [\(block.kind.rawValue)] \(block.text.prefix(70))")
+            }
+        }
+    }
+}
+
+extension OCRProbe {
+    /// What the sentence boundary makes of a Chinese line, in isolation.
+    static func boundaryCheck() {
+        let chinese = SimplifiedChinese.language
+        let boundary = chinese.sentenceBoundary
+        let samples = [
+            "本院于2024年3月15日立案执行，依法向你发出本通知。限你于收到本通知之日起3日内履行下列义务：",
+            "一、支付货款人民币580000元及利息23400元；二、支付违约金人民币46000元；",
+            Fixtures.dense.joined()
+        ]
+        for sample in samples {
+            let stops = boundary.stopLocations(in: sample)
+            let ranges = boundary.sentenceRanges(in: sample)
+            print("stops \(stops.count), sentences \(ranges.count) — \(sample.prefix(40))")
         }
     }
 }

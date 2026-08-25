@@ -25,8 +25,9 @@ public struct SourceLanguage: Sendable {
     /// Whether words are separated by spaces. False for Chinese, and it
     /// changes what a stray space in an OCR reading means.
     public let isSpaceSeparated: Bool
-    /// Where a sentence stops, including the full-width forms.
-    public let sentenceTerminators: Set<Character>
+    /// Where a sentence stops, and everything the boundary algorithm needs to
+    /// tell a stop from a decimal point, an ordinal or an abbreviation.
+    public let sentenceRules: SentenceBoundaryRules
     /// Roughly how many target characters one source character becomes. A
     /// hanzi carries about as much as five or six English letters, so a
     /// translation far off this ratio is either truncated or looping.
@@ -46,7 +47,7 @@ public struct SourceLanguage: Sendable {
         visionRecognitionLanguages: [String],
         scriptCharacters: CharacterSet,
         isSpaceSeparated: Bool,
-        sentenceTerminators: Set<Character>,
+        sentenceRules: SentenceBoundaryRules,
         expansionRatio: ClosedRange<Double>,
         promptName: String,
         normalizeReading: @escaping @Sendable (String) -> String = { $0 }
@@ -57,11 +58,15 @@ public struct SourceLanguage: Sendable {
         self.visionRecognitionLanguages = visionRecognitionLanguages
         self.scriptCharacters = scriptCharacters
         self.isSpaceSeparated = isSpaceSeparated
-        self.sentenceTerminators = sentenceTerminators
+        self.sentenceRules = sentenceRules
         self.expansionRatio = expansionRatio
         self.promptName = promptName
         self.normalizeReading = normalizeReading
     }
+
+    /// The characters that end a sentence, for the callers that only need to
+    /// ask whether a line stops.
+    public var sentenceTerminators: Set<Character> { sentenceRules.stops }
 
     /// How much of a string is this script, which is how the app tells "this
     /// page is in the language I was set up for" from "this page is not".

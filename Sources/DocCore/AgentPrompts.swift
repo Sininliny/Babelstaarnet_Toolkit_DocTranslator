@@ -39,33 +39,50 @@ public enum AgentPrompts {
         "Transcribe every line of \(language.promptName) text on this page."
     }
 
-    /// A model's transcription into blocks.
+    /// A model's transcription into blocks — one per sentence, the same unit
+    /// the recognizer's reading is cut into.
     ///
-    /// It returns text and no geometry, so its blocks carry the whole page as
+    /// Splitting here is what makes the two readings comparable at all. Left
+    /// as returned, the model gives one block per printed line and the
+    /// recognizer gives one per run of similar-looking lines; on a page with
+    /// even spacing that was twenty-four against two, and no alignment can
+    /// bridge a factor of twelve. Cut both at sentence stops and they land on
+    /// the same units.
+    ///
+    /// The model returns no geometry, so its blocks carry the whole page as
     /// their box. Nothing downstream aligns this reader on geometry — the
-    /// reconciler matches its paragraphs to the recognizer's by what they
-    /// say, which is the only thing the two have in common.
+    /// reconciler matches it to the recognizer by what the two say, which is
+    /// the only thing they have in common.
     public static func blocks(
         fromTranscription response: String,
         pageIndex: Int,
         language: SourceLanguage
     ) -> [SourceBlock] {
-        let paragraphs = stripFences(response)
-            .components(separatedBy: "\n")
-            .map { language.normalizeReading($0) }
-            .filter { !$0.isEmpty }
+        let boundary = language.sentenceBoundary
+        var blocks: [SourceBlock] = []
 
-        return paragraphs.enumerated().map { index, text in
-            SourceBlock(
-                pageIndex: pageIndex,
-                order: index,
-                box: .full,
-                kind: .paragraph,
-                lines: [text],
-                text: text,
-                confidence: nil
-            )
+        for line in stripFences(response).components(separatedBy: "\n") {
+            let text = language.normalizeReading(line)
+            guard !text.isEmpty else { continue }
+            let source = text as NSString
+            for range in boundary.sentenceRanges(in: text) {
+                let sentence = source.substring(with: range)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !sentence.isEmpty else { continue }
+                blocks.append(
+                    SourceBlock(
+                        pageIndex: pageIndex,
+                        order: blocks.count,
+                        box: .full,
+                        kind: .paragraph,
+                        lines: [sentence],
+                        text: sentence,
+                        confidence: nil
+                    )
+                )
+            }
         }
+        return blocks
     }
 
     /// The announcement a small model puts in front of a translation.
