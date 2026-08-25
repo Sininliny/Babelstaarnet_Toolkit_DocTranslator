@@ -29,6 +29,18 @@ struct WorkingView: View {
                     }
                 }
                 ProgressView(value: model.progress.fraction)
+                if !model.profile.isEmpty {
+                    // Shown while the work is happening, not afterwards: a
+                    // wrong reading of what the document is will be applied
+                    // to every sentence, and the reader is the only one who
+                    // can see that it is wrong.
+                    Label(
+                        model.profile.summary,
+                        systemImage: "text.book.closed"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 if !model.progress.readerNotes.isEmpty {
                     HStack(spacing: 14) {
                         ForEach(model.progress.readerNotes, id: \.self) {

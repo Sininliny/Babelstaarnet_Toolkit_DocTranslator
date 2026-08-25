@@ -20,20 +20,31 @@ import Foundation
 /// Any one of the three can be absent — on a Mac with Apple Intelligence
 /// turned off, two of them are — and the confidence score says so rather than
 /// quietly meaning something different.
+///
+/// All three see the `DocumentProfile`, and the reason is that none of them
+/// can see the document. They are each shown one block, which is the only way
+/// a translation of any length is affordable, and it is also the reason a
+/// pipeline built this way drifts: the block is right, the next block is
+/// right, and the two disagree about what 甲方 is called. The profile is what
+/// the whole document knows, carried down to a stage that can only see one
+/// paragraph of it.
 public struct BlockTranslator: Sendable {
     private let languages: LanguagePair
     private let translator: any TranslationEngine
     private let secondOpinion: (any TranslationEngine)?
     private let reviewer: (any TextAgent)?
     private let brief: TranslationBrief
+    private let profile: DocumentProfile
 
     public init(
         languages: LanguagePair,
         translator: any TranslationEngine,
         secondOpinion: (any TranslationEngine)? = nil,
         reviewer: (any TextAgent)? = nil,
-        brief: TranslationBrief = .none
+        brief: TranslationBrief = .none,
+        profile: DocumentProfile = .unknown
     ) {
+        self.profile = profile
         self.languages = languages
         self.translator = translator
         self.secondOpinion = secondOpinion
@@ -43,7 +54,7 @@ public struct BlockTranslator: Sendable {
 
     public func translate(
         _ block: ReconciledBlock,
-        documentContext: String? = nil
+        following context: TranslationContext = .none
     ) async -> TranslatedBlock {
         // Page numbers and running heads are kept as they are. Translating
         // them costs a model call per page and produces "Page 3".
@@ -60,7 +71,7 @@ public struct BlockTranslator: Sendable {
 
         let draft: String
         do {
-            draft = try await translated(block)
+            draft = try await translated(block, following: context)
         } catch {
             return TranslatedBlock(
                 source: block,
@@ -93,7 +104,8 @@ public struct BlockTranslator: Sendable {
             translation: final,
             language: languages.source,
             target: languages.target,
-            brief: brief
+            brief: brief,
+            profile: profile
         )
 
         return TranslatedBlock(
@@ -114,14 +126,22 @@ public struct BlockTranslator: Sendable {
         )
     }
 
-    private func translated(_ block: ReconciledBlock) async throws -> String {
+    private func translated(
+        _ block: ReconciledBlock,
+        following context: TranslationContext
+    ) async throws -> String {
         if let agentTranslator = translator as? TextAgentTranslator {
             return try await agentTranslator.translate(
                 block.text,
                 kind: block.kind,
-                languages: languages
+                languages: languages,
+                following: context
             )
         }
+        // A dedicated translation model takes no context and no
+        // instructions. That is the trade the pipeline makes when it leads:
+        // faster and steadier, and deaf to everything the document says
+        // about itself.
         return try await translator.translate(block.text, languages: languages)
     }
 
@@ -142,7 +162,9 @@ public struct BlockTranslator: Sendable {
             let answer = try await reviewer.answer(
                 instructions: AgentPrompts.reviewInstructions(
                     languages: languages,
-                    brief: brief
+                    brief: brief,
+                    profile: profile,
+                    agreedTerms: profile.termLines(appearingIn: block.text)
                 ),
                 prompt: AgentPrompts.reviewPrompt(
                     source: block.text,

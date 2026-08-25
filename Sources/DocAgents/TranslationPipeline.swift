@@ -13,6 +13,7 @@ public enum PipelineEvent: Sendable {
     case readerFinished(PageReader, page: Int, blocks: Int, seconds: Double)
     case pageReconciled(page: Int, blocks: Int, contested: Int)
     case asking(count: Int)
+    case readDocument(DocumentProfile)
     case blockTranslated(TranslatedBlock, page: Int, index: Int, of: Int)
     case pageFinished(TranslatedPage)
     case finished(TranslatedDocument)
@@ -54,6 +55,14 @@ public struct Engines: Sendable {
 
     public var canTranslate: Bool {
         textAgent != nil || machineTranslator != nil
+    }
+
+    /// The reader the survey may spend on pages the document does not carry
+    /// text for. The quickest one, and nothing at all if the only reader
+    /// available is the slow one: establishing what a document is is worth
+    /// half a second a page and is not worth a minute.
+    var surveyReader: (any PageTranscriber)? {
+        readers.first { $0.reader.readsQuickly }
     }
 }
 
@@ -110,7 +119,15 @@ public struct TranslationPipeline: Sendable {
         var brief = brief
         var pages: [TranslatedPage] = []
         var documentContext: String?
-        var asked = false
+        var profile = DocumentProfile.unknown
+        // Set on the first page that had anything on it, not on the first
+        // page. A document whose cover sheet recognizes as nothing must not
+        // spend its one survey on the blank page.
+        var surveyed = false
+        // Carried across pages as well as within them: a sentence at the top
+        // of page four follows the one at the foot of page three, and a
+        // translator told otherwise starts the document again twelve times.
+        var context = TranslationContext.none
 
         for index in 0..<source.pageCount {
             try Task.checkCancellation()
@@ -138,32 +155,62 @@ public struct TranslationPipeline: Sendable {
                     ?? blocks.first { $0.kind.isTranslatable }?.text
             }
 
-            // Asked once, after the first page that had anything on it.
-            if !asked, let clarify, let agent = engines.textAgent,
-               !blocks.isEmpty {
-                asked = true
-                let questions = await ClarificationAgent(
+            // Everything that has to be decided about the document as a
+            // whole is decided here: once, on the first page that had
+            // anything on it, from a sample taken across the document rather
+            // than off the front of it.
+            if !surveyed, !blocks.isEmpty, let agent = engines.textAgent {
+                surveyed = true
+                let sample = await DocumentSurvey(
+                    provider: provider,
+                    language: languages.source,
+                    reader: engines.surveyReader
+                ).sample(openingWith: blocks)
+
+                // Read before translated. This is the difference between
+                // translating a document and translating a list of sentences
+                // that happen to have been printed near each other.
+                profile = await DocumentReader(
                     languages: languages,
                     agent: agent
-                ).questions(about: blocks)
-                if !questions.isEmpty {
-                    await onEvent(.asking(count: questions.count))
-                    brief.settledQuestions += await clarify(questions)
+                ).profile(from: sample)
+                if !profile.isEmpty {
+                    await onEvent(.readDocument(profile))
+                }
+
+                // Asked from the same sample, so a question raised only by
+                // page nine still gets asked before page one is translated.
+                if let clarify {
+                    let questions = await ClarificationAgent(
+                        languages: languages,
+                        agent: agent
+                    ).questions(from: sample)
+                    if !questions.isEmpty {
+                        await onEvent(.asking(count: questions.count))
+                        brief.settledQuestions += await clarify(questions)
+                    }
                 }
             }
 
             let translator = blockTranslator(
                 brief: brief,
-                documentContext: documentContext
+                documentContext: documentContext,
+                profile: profile
             )
             var translated: [TranslatedBlock] = []
             for (position, block) in blocks.enumerated() {
                 try Task.checkCancellation()
                 let result = await translator.translate(
                     block,
-                    documentContext: documentContext
+                    following: context
                 )
                 translated.append(result)
+                if block.kind.isTranslatable {
+                    context = TranslationContext(
+                        previousSource: block.text,
+                        previousTarget: result.text
+                    )
+                }
                 await onEvent(
                     .blockTranslated(
                         result,
@@ -183,7 +230,8 @@ public struct TranslationPipeline: Sendable {
             source: source,
             languages: languages,
             pages: pages,
-            engines: record()
+            engines: record(),
+            profile: profile
         )
         await onEvent(.finished(document))
         return document
@@ -254,22 +302,25 @@ public struct TranslationPipeline: Sendable {
 
     private func blockTranslator(
         brief: TranslationBrief,
-        documentContext: String?
+        documentContext: String?,
+        profile: DocumentProfile
     ) -> BlockTranslator {
         let modelTranslator = engines.textAgent.map {
             TextAgentTranslator(
                 agent: $0,
                 brief: brief,
-                documentContext: documentContext
+                documentContext: documentContext,
+                profile: profile
             )
         }
 
-        // A brief the leading translator cannot read is not a brief. When the
-        // reader has asked for something specific, the instruction-following
-        // translator leads whatever the preference says — and when they have
-        // not, the preference decides.
+        // A brief the leading translator cannot read is not a brief, and
+        // neither is a document profile. When there is anything to follow,
+        // the instruction-following translator leads whatever the speed
+        // preference says; when there is not, the preference decides.
         let modelLeads = engines.preference == .followsInstructions
             || !brief.isEmpty
+            || !profile.isEmpty
         let lead: (any TranslationEngine)?
         let second: (any TranslationEngine)?
         if modelLeads, let modelTranslator {
@@ -289,7 +340,8 @@ public struct TranslationPipeline: Sendable {
             translator: lead ?? engines.machineTranslator!,
             secondOpinion: second,
             reviewer: engines.textAgent,
-            brief: brief
+            brief: brief,
+            profile: profile
         )
     }
 

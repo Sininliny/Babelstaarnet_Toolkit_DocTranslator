@@ -5,7 +5,8 @@ installing and using the app; [PRIVACY.md](PRIVACY.md) covers the guarantee.
 
 ## The pipeline
 
-A page goes through five stages, and everything is **per sentence**.
+A page goes through six stages. Everything is **per sentence**, and every
+sentence is translated against the whole document.
 
 That unit is not an aesthetic choice, and getting it wrong broke the app once
 already. A recognizer and a vision-language model do not divide a page the same
@@ -27,6 +28,11 @@ Babelstårnet reached the same unit from the other end — it assembles a senten
 *across* wrapped lines, because bridging a single visual line gave readers
 fragments that began after the subject and stopped before the verb. Its
 `SentenceBoundary` is used here as it stands.
+
+The unit is the sentence; the context is the document. Those are different
+questions, and a pipeline that answers the first one well and does not ask the
+second produces a document that is correct sentence by sentence and reads like
+several translations stapled together. Stage 3 exists for the second question.
 
 ### 1. Read it, twice
 
@@ -145,10 +151,59 @@ Two asymmetries follow from the same reasoning:
   least trustworthy output, and it is left out of the layout-preserving export
   entirely — it has no measured place on the page to be drawn in.
 
-### 3. Ask, if it matters
+### 3. Read the document
+
+Before a word of it is translated, one model call establishes what the document
+*is*: what kind of thing it is, what it concerns, how it should sound, and up
+to eight recurring terms with the rendering each will get throughout. That is
+`DocumentProfile`, and every stage afterwards is handed it.
+
+The terms are the part that earns the call. 甲方 is "Party A" in a contract and
+"the first party" in a news report. 执行 is "enforcement" in a court notice and
+"execution" in a technical manual. 通知 is a "notice" from an authority and a
+"notification" in software. A translator shown one sentence at a time will pick
+a defensible rendering each time and pick differently on page seven than on
+page one — and because every individual choice is correct, nothing downstream
+flags it. Not the second translator, which is translating the same lone
+sentence. Not the reviewing model, which is shown one block. Deciding once, in
+advance, and handing the decision down is the only thing that fixes it.
+
+**What it reads is a sample from across the document, not the front of it.**
+Profiling from page one means profiling from a cover sheet, a letterhead, or a
+case number — a contract states its parties on page one and defines its terms
+on page three, and a judgment says what was decided at the end. So
+`DocumentSurvey` spans the document, and what that costs depends on the file:
+
+- **A PDF that carries its own text** costs nothing. The text is already in the
+  file, so up to twelve pages of it are sampled, spread across the document.
+- **A scan or a photograph** has to be recognized, so the survey is rationed to
+  two extra pages beyond the one already read — chosen for spread, ending on
+  the last page — and only with a reader quick enough to be worth it. Vision is
+  half a second a page; the vision model is closer to twenty, and a survey that
+  costs a minute has stopped being a survey.
+
+Neither path reads the whole of a long document and neither claims to. What
+both produce is a sample taken across it rather than off the front.
+
+Two things follow from having a profile at all. A profile is something to
+follow, so — exactly like a non-empty brief — it puts the instruction-following
+translator in the lead whatever the speed preference says; a dedicated
+translation model cannot be told anything. And the profile is shown in the
+window *while the work is running*, because a wrong reading of what the
+document is becomes a wrong assumption in every block, and the reader is the
+only participant who can see that it is wrong.
+
+Alongside the profile, each block is also given the sentence before it and the
+English that sentence was translated into — across page breaks, not just within
+a page. The English half is what keeps a recurring term rendered the same way
+twenty sentences apart without anyone having written it down.
+
+### 4. Ask, if it matters
 
 Before anything is translated, the app may ask up to three questions about the
-document — but only where the answer would change the English. This stage
+document — from the same survey the profile was built from, so a question
+raised only by page nine is still asked before page one is translated — but
+only where the answer would change the English. This stage
 exists because some translation errors cannot be caught afterwards at all: a
 translator that does not know whether 对方 is the other party to a contract or
 the other side in a dispute will pick one, write a fluent sentence around it,
@@ -158,7 +213,7 @@ The reader is the only participant who knows what the document is. "I'm not
 sure" is always offered and always last, because forcing a guess converts the
 app's uncertainty into the reader's decision, which is worse than not asking.
 
-### 4. Translate
+### 5. Translate
 
 Two kinds of translator, and they are not interchangeable:
 
@@ -174,7 +229,7 @@ instruction-following translator in the lead, whatever the speed preference
 says — otherwise choosing "fastest" would silently discard everything the
 reader asked for.
 
-### 5. Check it
+### 6. Check it
 
 Three independent checks, and the third is the one that earns its place:
 
@@ -187,7 +242,17 @@ Three independent checks, and the third is the one that earns its place:
   and it will approve a fluent paragraph whose figures changed. Dropped or
   invented numbers, source script left untranslated, text handed back
   unchanged, repetition loops, a model answering about the task instead of
-  doing it, and any pinned term the translation ignored.
+  doing it, any pinned term the translation ignored, and any rendering that
+  disagrees with what the document settled on in stage 3.
+
+That last one is the check with no model equivalent anywhere in the pipeline. A
+block that renames a party is fluent, faithful to its own sentence, and wrong
+only in relation to the other forty blocks — which is exactly the comparison
+neither the second translator nor the reviewer is in a position to make. It is
+raised as a caution rather than a failure, and the distinction is deliberate: a
+pinned term is the reader's instruction and the profile is the app's own
+reading, so it is entitled to be flagged and not to be obeyed. Where the reader
+has pinned the same term, the reader wins and the app says nothing.
 
 A blocking mechanical finding caps the confidence below the top band and cannot
 be outvoted, because everything else going right is exactly the condition under
@@ -296,3 +361,9 @@ checkout with the tools alone.
   gutter.
 - **Handwriting** is out of scope for Vision's Chinese recognition and will
   read badly or not at all.
+- **The document profile is built from a sample, not the whole document.** A
+  document that changes character partway through — a contract with an
+  unrelated technical annex — is profiled from the parts the survey saw, and
+  the annex is translated as though it were still the contract. The profile is
+  shown in the window while the run is going so this is visible rather than
+  silent, and an instruction in the brief overrides it.

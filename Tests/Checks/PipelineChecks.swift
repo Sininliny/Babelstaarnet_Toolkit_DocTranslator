@@ -3,19 +3,28 @@ import DocCore
 import Foundation
 import LanguageChinese
 
-/// A model that plays all three text roles from a script.
+/// A model that plays all four text roles from a script.
 ///
-/// It has to tell them apart the way a real model does — from the prompt — so
-/// the check exercises the prompts as well as the pipeline.
+/// It has to tell them apart the way a real model does — from what it was
+/// asked — so the check exercises the prompts as well as the pipeline. The
+/// roles are told apart by their instructions rather than their prompts,
+/// because two of them are now handed the same survey of the document and
+/// differ only in what they are asked to do with it.
 private func scriptedTextAgent(
     english: [String: String],
-    questions: String = AgentPrompts.noQuestionsMarker
+    questions: String = AgentPrompts.noQuestionsMarker,
+    profile: String = "I have nothing to say about this document.",
+    recording: Recorder? = nil
 ) -> ScriptedAgent {
-    ScriptedAgent { prompt, _ in
-        if prompt.contains("beginning of the document") {
+    ScriptedAgent { instructions, prompt, _ in
+        if instructions.contains("ask the reader up to three questions") {
             return questions
         }
+        if instructions.contains("read it and say what it is") {
+            return profile
+        }
         if prompt.contains("Translate this") {
+            recording?.append(instructions: instructions, prompt: prompt)
             let source = prompt
                 .components(separatedBy: "\n")
                 .last?
@@ -23,6 +32,27 @@ private func scriptedTextAgent(
             return english[source] ?? source
         }
         return AgentPrompts.verdictMarker + " " + AgentPrompts.verdictAccurate
+    }
+}
+
+/// What the model was told, kept so a check can assert on it. The interesting
+/// question about a document profile is not whether it parsed but whether it
+/// reached the block being translated on page four.
+final class Recorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var calls: [(instructions: String, prompt: String)] = []
+
+    func append(instructions: String, prompt: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        calls.append((instructions, prompt))
+    }
+
+    /// The call that translated a given source text.
+    func translating(_ source: String) -> (instructions: String, prompt: String)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls.first { $0.prompt.hasSuffix(source) }
     }
 }
 
@@ -212,6 +242,88 @@ func runPipelineChecks(_ report: Report) async {
         "and with nothing asked for, the preference decides"
     )
 
+    report.begin("pipeline/profile")
+
+    // The point of the whole stage: a block on the last page is translated
+    // knowing what the first page established. Nothing about the block itself
+    // says it is part of a court notice, and translated on its own it would
+    // be rendered by a translator that had never seen one.
+    let opening = "北京市朝阳区人民法院执行通知书，被执行人王小明应当履行义务。"
+    let later = "被执行人逾期未履行的，本院将依法强制执行。"
+    func pages(_ kind: PageReader) -> ScriptedReader {
+        ScriptedReader(
+            reader: kind,
+            pages: [
+                0: [block(opening, order: 0)],
+                1: [block(later, order: 0, page: 1)]
+            ]
+        )
+    }
+    let recorder = Recorder()
+    let read = scriptedTextAgent(
+        english: [
+            opening: "Enforcement notice of the Chaoyang District People's "
+                + "Court, Beijing: the person subject to enforcement, Wang "
+                + "Xiaoming, shall perform the obligation.",
+            later: "If the judgment debtor fails to perform in time, this "
+                + "court will enforce the judgment according to law."
+        ],
+        profile: """
+            KIND: a court enforcement notice
+            SUBJECT: an order to pay a judgment debt
+            REGISTER: formal legal
+            TERM: 被执行人 | the person subject to enforcement
+            """,
+        recording: recorder
+    )
+    let profiled = try? await TranslationPipeline(
+        languages: languages,
+        engines: Engines(
+            readers: [pages(.visionOCR), pages(.visionLanguageModel)],
+            textAgent: read,
+            machineTranslator: ScriptedTranslator { _ in "from the machine" },
+            preference: .fastest
+        )
+    ).run(BlankPages(pageCount: 2))
+
+    report.equal(
+        profiled?.profile.kind,
+        "a court enforcement notice",
+        "what the app decided the document was is carried with the result"
+    )
+    let onPageTwo = recorder.translating(later)
+    report.expect(
+        onPageTwo?.instructions.contains("court enforcement notice") == true,
+        "a block on the second page is translated knowing what the document is"
+    )
+    report.expect(
+        onPageTwo?.prompt.contains("the person subject to enforcement") == true,
+        "and knowing what the document already calls its recurring terms"
+    )
+    report.expect(
+        onPageTwo?.prompt.contains("Enforcement notice of the Chaoyang") == true,
+        "and what came immediately before it, across the page break"
+    )
+    // The profile does what a brief does: it is something to follow, and the
+    // translator that cannot follow anything must not be the one leading.
+    report.equal(
+        profiled?.blocks.first?.firstDraft.isEmpty,
+        false,
+        "a document with a profile is translated by the model, not the machine"
+    )
+    report.expect(
+        profiled?.blocks.contains { $0.firstDraft == "from the machine" }
+            == false,
+        "even when the speed preference asked for the machine"
+    )
+    // The rendering the document settled on, checked mechanically — the one
+    // defect no model in this pipeline is in a position to notice.
+    let drifted = profiled?.blocks.first { $0.source.text == later }
+    report.expect(
+        drifted?.findings.contains { $0.kind == .inconsistentTerm } == true,
+        "a block that renames the party halfway down the document is flagged"
+    )
+
     report.begin("pipeline/questions")
 
     // The clarification handshake: the pipeline parks, the answer arrives,
@@ -269,7 +381,7 @@ func runPipelineChecks(_ report: Report) async {
             blocks: [block(sources[0], order: 0)]
         )
     ]
-    let refusing = ScriptedAgent { prompt, _ in
+    let refusing = ScriptedAgent.replying { prompt, _ in
         if prompt.contains("Which is closer to what is printed") {
             throw AgentFailure.refused(
                 "a text layer must not need an adjudicator"

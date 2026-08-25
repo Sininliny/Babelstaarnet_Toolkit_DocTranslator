@@ -184,6 +184,13 @@ public enum PageReader: String, Sendable, Codable, CaseIterable {
     /// The text layer is the page's own copy of its text, so where it exists
     /// it settles a disagreement without a model being asked.
     public var isAuthoritative: Bool { self == .pdfTextLayer }
+
+    /// Whether this reader is cheap enough to run over pages the app only
+    /// wants the gist of. Vision is half a second a page and a vision model
+    /// is closer to twenty, so the survey that establishes what a document is
+    /// can afford the first and cannot afford the second — a survey that
+    /// costs a minute has stopped being a survey.
+    public var readsQuickly: Bool { self != .visionLanguageModel }
 }
 
 /// One reader's account of one page.

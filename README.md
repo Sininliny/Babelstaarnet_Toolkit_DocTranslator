@@ -20,6 +20,17 @@ this Mac is eligible for. Where they agree, that is evidence. Where they disagre
 so and shows you both readings rather than picking quietly. Where the PDF
 carries its own text, neither of them has to guess.
 
+**It reads the document before it translates a sentence of it.** A translator
+shown one sentence at a time has to guess what kind of thing it is holding, and
+it guesses again on the next sentence. 甲方 becomes "Party A" on page one and
+"the first party" on page seven; both are correct on their own line, which is
+why nothing catches it and why the result reads like two translations stapled
+together. So the app reads first — a sample taken from across the document, not
+off the front of it — and settles what this is, how it should sound, and what
+its recurring terms will be called. Every sentence after that is translated as
+part of something. Where a block disagrees with what the document settled on,
+it is marked, because no model reading one paragraph can see it.
+
 **The app tells you what it is unsure about.** Every block carries a confidence
 and a reason in plain words — "the readers disagreed — “未” against “末” — and
 Vision OCR was chosen" — and the blocks that need a human are one click from
@@ -30,8 +41,9 @@ have to trust; this one shows its working.
 first will approve a fluent paragraph whose figures changed, because it is
 another language model with the same blind spots. So the review is mechanical
 as well: dropped numbers, missing clauses, source text left untranslated,
-repetition loops, and the instructions you gave are all checked without asking
-anyone.
+repetition loops, the instructions you gave, and any block that renames
+something the rest of the document had already named are all checked without
+asking anyone.
 
 **It asks before it guesses.** If something about the document has two
 defensible translations — a term of art, a name that could be a person or a
@@ -103,14 +115,15 @@ Nothing, on a Mac with Apple Intelligence available. The engines it looks for:
 | Reads the page | Apple Vision | Nothing. Part of macOS. |
 | Reads it again | Læsesalen's own vision model | A build with `make app-mlx`, then one download from inside the app |
 | Reads it again | Apple's on-device model | Apple Intelligence on, macOS 27 for images |
-| Settles disagreements, reviews, asks | Either of the above | — |
+| Reads the document, settles disagreements, reviews, asks | Either of the above | — |
 | Translates | Apple Translation | A one-time Chinese download, offered in the app |
 | *(optional)* Anything above | A model server you run | Off by default; loopback only |
 
 The app works with less than all of them and says which are missing and what
 would fix each one. With only Vision and Apple Translation it still reads,
-translates, and runs every mechanical check — it just has no second reader and
-no reviewer, and the confidence scores say exactly that.
+translates, and runs every mechanical check — it just has no second reader, no
+reviewer, and no reading of the document as a whole, and the confidence scores
+say exactly that.
 
 Læsesalen's own model is a 4-bit Qwen2.5-VL, about 2.3 GB, fetched once from
 Hugging Face and run on this Mac from then on. Your document is not part of

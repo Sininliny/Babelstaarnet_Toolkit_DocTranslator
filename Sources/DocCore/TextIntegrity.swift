@@ -22,6 +22,7 @@ public struct IntegrityFinding: Sendable, Identifiable, Equatable {
         case repeatedRun
         case leakedInstruction
         case briefIgnored
+        case inconsistentTerm
     }
 
     public let id: UUID
@@ -66,7 +67,8 @@ public enum TextIntegrity {
         translation: String,
         language: SourceLanguage,
         target: TargetLanguage,
-        brief: TranslationBrief = .none
+        brief: TranslationBrief = .none,
+        profile: DocumentProfile = .unknown
     ) -> [IntegrityFinding] {
         var findings: [IntegrityFinding] = []
         let trimmedSource = source.trimmingCharacters(
@@ -189,6 +191,38 @@ public enum TextIntegrity {
                     message: "You asked for “\(term.term)” to be handled a "
                         + "particular way, and this block does not do it.",
                     evidence: required
+                )
+            )
+        }
+
+        // The renderings the app settled on when it read the whole document,
+        // checked the same way — because this is the one defect a document
+        // translated a sentence at a time reliably has and no other check in
+        // this pipeline can see. Every block is defensible on its own line;
+        // the document still reads as though two people produced it, and the
+        // reviewing model, which is shown one block at a time, has no way to
+        // notice. Only something holding the whole document's decisions can.
+        //
+        // A caution rather than a failure, and the difference is the point:
+        // the brief is the reader's instruction and this is the app's own
+        // reading, so it is entitled to be flagged and not to be obeyed.
+        for (term, rendering) in profile.terms(appearingIn: trimmedSource) {
+            // The reader's own decision about a term outranks the app's, and
+            // where they disagree the brief check above has already had its
+            // say. Reporting both would mark a block for doing exactly what
+            // it was told.
+            guard !brief.glossary.contains(where: { $0.term == term })
+            else { continue }
+            guard !rendering.isEmpty,
+                  !trimmed.localizedCaseInsensitiveContains(rendering)
+            else { continue }
+            findings.append(
+                IntegrityFinding(
+                    kind: .inconsistentTerm,
+                    severity: .caution,
+                    message: "The rest of the document renders “\(term)” as "
+                        + "“\(rendering)”, and this block does not.",
+                    evidence: rendering
                 )
             )
         }

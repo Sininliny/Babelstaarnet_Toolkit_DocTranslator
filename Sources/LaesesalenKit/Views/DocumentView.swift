@@ -46,6 +46,11 @@ struct DocumentView: View {
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !model.profile.isEmpty {
+                    Text("Translated as " + model.profile.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
