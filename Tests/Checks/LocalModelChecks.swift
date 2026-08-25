@@ -26,7 +26,7 @@ func runLocalModelChecks(_ report: Report) async {
     )
     #else
     let chinese = SimplifiedChinese.language
-    let lines = VLMProbe.dense
+    let lines = Fixtures.dense
     guard let image = Fixtures.page(
         lines: lines,
         fontSize: 30,

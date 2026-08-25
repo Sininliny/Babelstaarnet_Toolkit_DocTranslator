@@ -9,26 +9,9 @@ import MLXLMCommon
 
 /// Finds out why a vision model answered without looking.
 enum VLMProbe {
-    /// A page like the ones this app is actually pointed at: many lines of
-    /// small type, with figures in them.
-    static let dense = [
-        "北京市朝阳区人民法院执行通知书",
-        "案号：（2024）京0105执12345号",
-        "被执行人：王小明，身份证号110105199003074567",
-        "申请执行人：北京安泰科技有限公司",
-        "本院于2024年3月15日立案执行，依法向你发出本通知。",
-        "限你于收到本通知之日起3日内履行下列义务：",
-        "一、支付货款人民币580000元及利息23400元；",
-        "二、支付违约金人民币46000元；",
-        "三、承担案件受理费9800元、执行费4900元。",
-        "逾期未履行的，本院将依法强制执行，并加倍支付迟延履行期间的债务利息。",
-        "如对本通知有异议，可在收到之日起10日内向本院提出书面异议。",
-        "二〇二四年三月二十日"
-    ]
-
     static func run() async {
         let chinese = SimplifiedChinese.language
-        let lines = dense
+        let lines = Fixtures.dense
         guard let page = Fixtures.page(
             lines: lines,
             fontSize: 30,

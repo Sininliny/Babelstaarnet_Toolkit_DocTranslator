@@ -46,6 +46,20 @@ public enum BlockAlignment {
     /// What an unmatched block costs. Small: leaving a block unmatched has to
     /// stay cheaper than forcing it onto text it has nothing to do with.
     static let gapPenalty = -0.05
+    /// How many blocks on one side may be matched against one on the other.
+    ///
+    /// This is not a tuning constant, it is the difference between the
+    /// alignment working and failing outright. The two readers do not merely
+    /// disagree about paragraph boundaries — they work at different
+    /// granularities. On a court notice with evenly spaced lines, Apple
+    /// Vision found two blocks (it has only the spacing to go on, and the
+    /// spacing was uniform) while the vision model returned eleven, one per
+    /// printed line. With a limit of two, nine of the model's blocks matched
+    /// nothing, were adopted as text only it had seen, and were translated —
+    /// while the recognizer's reading of the same words, which was correct to
+    /// 0.99, sat beside them unused. The safety property the whole pipeline
+    /// is built on had inverted.
+    static let mergeWindow = 8
 
     public static func align(
         _ left: [SourceBlock],
@@ -60,8 +74,9 @@ public enum BlockAlignment {
 
         enum Move {
             case pair
-            case mergeRight
-            case mergeLeft
+            /// One block on the left against this many on the right.
+            case mergeRight(Int)
+            case mergeLeft(Int)
             case skipLeft
             case skipRight
             case start
@@ -105,25 +120,27 @@ public enum BlockAlignment {
                     move = .pair
                 }
 
-                if column >= 2 {
-                    let merged = score[row - 1][column - 2] + reward(
-                        left[row - 1].text,
-                        right[column - 2].text + right[column - 1].text
-                    )
+                for span in 2...mergeWindow where column >= span {
+                    let joined = right[(column - span)..<column]
+                        .map(\.text)
+                        .joined()
+                    let merged = score[row - 1][column - span]
+                        + reward(left[row - 1].text, joined)
                     if merged > best {
                         best = merged
-                        move = .mergeRight
+                        move = .mergeRight(span)
                     }
                 }
 
-                if row >= 2 {
-                    let merged = score[row - 2][column - 1] + reward(
-                        left[row - 2].text + left[row - 1].text,
-                        right[column - 1].text
-                    )
+                for span in 2...mergeWindow where row >= span {
+                    let joined = left[(row - span)..<row]
+                        .map(\.text)
+                        .joined()
+                    let merged = score[row - span][column - 1]
+                        + reward(joined, right[column - 1].text)
                     if merged > best {
                         best = merged
-                        move = .mergeLeft
+                        move = .mergeLeft(span)
                     }
                 }
 
@@ -149,9 +166,9 @@ public enum BlockAlignment {
                 )
                 row -= 1
                 column -= 1
-            case .mergeRight:
+            case .mergeRight(let span):
                 let a = left[row - 1]
-                let b = Array(right[(column - 2)...(column - 1)])
+                let b = Array(right[(column - span)..<column])
                 pairs.append(
                     Pair(
                         left: [a],
@@ -163,9 +180,9 @@ public enum BlockAlignment {
                     )
                 )
                 row -= 1
-                column -= 2
-            case .mergeLeft:
-                let a = Array(left[(row - 2)...(row - 1)])
+                column -= span
+            case .mergeLeft(let span):
+                let a = Array(left[(row - span)..<row])
                 let b = right[column - 1]
                 pairs.append(
                     Pair(
@@ -177,7 +194,7 @@ public enum BlockAlignment {
                         )
                     )
                 )
-                row -= 2
+                row -= span
                 column -= 1
             case .skipLeft:
                 pairs.append(

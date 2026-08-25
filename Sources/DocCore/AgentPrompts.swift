@@ -68,6 +68,48 @@ public enum AgentPrompts {
         }
     }
 
+    /// The announcement a small model puts in front of a translation.
+    ///
+    /// "The text \"申请执行人：…\" translates to \"Applicant for
+    /// Enforcement: …\"" is a real answer from a 3B model that had just been
+    /// told, in the instructions, not to do this. Telling it again does not
+    /// work reliably; removing the preamble does, and costs nothing when
+    /// there is none.
+    ///
+    /// Conservative on purpose. It only fires when what follows the
+    /// announcement is non-empty, so a translation that happens to begin
+    /// "The text of the agreement…" is left alone.
+    public static func stripPreamble(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased()
+        let announcements = [
+            "translates to",
+            "translation:",
+            "the translation is",
+            "here is the translation",
+            "here's the translation",
+            "in english:"
+        ]
+        // Only in the opening — well past the start it is prose, not a
+        // preamble.
+        let window = String(lowered.prefix(160))
+        guard let announcement = announcements.first(where: window.contains),
+              let range = lowered.range(of: announcement) else {
+            return trimmed
+        }
+        var rest = String(trimmed[range.upperBound...])
+            .trimmingCharacters(in: CharacterSet(charactersIn: " :\n\t"))
+        // The answer is usually quoted after the announcement.
+        if rest.hasPrefix("\"") || rest.hasPrefix("“") {
+            rest = String(rest.dropFirst())
+            if let end = rest.lastIndex(where: { $0 == "\"" || $0 == "”" }) {
+                rest = String(rest[rest.startIndex..<end])
+            }
+        }
+        rest = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? trimmed : rest
+    }
+
     /// Models wrap output in code fences however plainly they are told not
     /// to, and a stray ``` in the source text would otherwise become part of
     /// a translation.
@@ -164,6 +206,10 @@ public enum AgentPrompts {
             - Output only the translation. No notes, no alternatives, no \
             explanation of your choices, no quotation marks around the whole \
             answer.
+            - Never begin with "The text", "This translates to", \
+            "Translation:", or any other announcement. The first word of your \
+            answer is the first word of the translation.
+            - Never repeat the \(languages.source.promptName) back.
             - If the text is a heading, translate it as a heading.
             """
 

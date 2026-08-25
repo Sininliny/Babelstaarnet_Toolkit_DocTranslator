@@ -27,7 +27,7 @@ enum FullRun {
         )
 
         guard let image = Fixtures.page(
-            lines: VLMProbe.dense,
+            lines: Fixtures.dense,
             footer: "第 1 页",
             fontSize: 30,
             startY: 150

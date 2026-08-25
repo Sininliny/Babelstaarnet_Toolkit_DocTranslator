@@ -40,6 +40,48 @@ func runAlignmentChecks(_ report: Report) {
         "blocks after a merge stay in step"
     )
 
+    // The readers do not merely disagree about boundaries; they work at
+    // different granularities. This is the case that broke a full run: the
+    // recognizer grouped a page into one block where the model returned six.
+    let sentences = [
+        "北京市朝阳区人民法院执行通知书。",
+        "案号为二零二四年京字第一二三号。",
+        "被执行人为王小明先生。",
+        "申请执行人为北京安泰科技有限公司。",
+        "本院于三月十五日立案执行。",
+        "限你于三日内履行下列义务。"
+    ]
+    let asOneBlock = [block(sentences.joined(), order: 0)]
+    let asSixBlocks = sentences.enumerated().map { index, text in
+        block(text, order: index)
+    }
+    let granularity = BlockAlignment.align(asOneBlock, asSixBlocks)
+    report.equal(
+        granularity.count,
+        1,
+        "one block against six is one pair, not seven"
+    )
+    report.equal(
+        granularity.first?.right.count,
+        6,
+        "and all six are on the other side of it"
+    )
+    report.expect(
+        (granularity.first?.similarity ?? 0) > 0.99,
+        "so the two readings are seen to agree"
+    )
+    // The direction that matters most: no block may be left looking as
+    // though only the language model saw it when the recognizer read it too.
+    report.expect(
+        granularity.allSatisfy { !$0.left.isEmpty && !$0.right.isEmpty },
+        "nothing is left unmatched"
+    )
+
+    // And the same the other way round.
+    let reversed = BlockAlignment.align(asSixBlocks, asOneBlock)
+    report.equal(reversed.count, 1, "six against one is one pair too")
+    report.equal(reversed.first?.left.count, 6, "with the six on the left")
+
     // A reader that missed a block leaves a gap rather than shifting
     // everything after it.
     let missing = [left[0], left[2]]

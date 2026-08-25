@@ -396,6 +396,16 @@ public enum TextIntegrity {
         for opening in openings where lowered.hasPrefix(opening) {
             return String(text.prefix(opening.count))
         }
+        // The one that is not an opening: a small model announcing the job
+        // mid-sentence — "The text “…” translates to “…”". Caught anywhere
+        // in the first line, because the announcement is what makes it an
+        // explanation rather than a translation, not where it sits.
+        let firstLine = lowered
+            .components(separatedBy: "\n")
+            .first ?? lowered
+        if firstLine.contains("translates to") {
+            return "translates to"
+        }
         return nil
     }
 

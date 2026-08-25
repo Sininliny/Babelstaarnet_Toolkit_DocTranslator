@@ -73,6 +73,7 @@ public enum SimplifiedChinese {
     /// A space between two Chinese characters is removed. A space beside a
     /// Latin letter or a digit is kept, because there it is a real word
     /// boundary in text that really is spaced.
+    @Sendable
     public static func normalize(_ text: String) -> String {
         var output = ""
         output.reserveCapacity(text.count)

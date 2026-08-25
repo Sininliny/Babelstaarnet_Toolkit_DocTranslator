@@ -131,6 +131,53 @@ func runPromptChecks(_ report: Report) {
         "the reviewer is told what the reader asked for"
     )
 
+    report.begin("prompts/preamble")
+
+    // Real answers from a 3B model that had been told not to do this.
+    report.equal(
+        AgentPrompts.stripPreamble(
+            "The text \"申请执行人：北京安泰科技有限公司\" translates to "
+                + "\"Applicant for Enforcement: Beijing Antai Technology "
+                + "Co., Ltd.\""
+        ),
+        "Applicant for Enforcement: Beijing Antai Technology Co., Ltd.",
+        "an announcement in front of a translation is removed"
+    )
+    report.equal(
+        AgentPrompts.stripPreamble(
+            "The text translates to:\n\n\"Perform within 3 days.\""
+        ),
+        "Perform within 3 days.",
+        "and so is one on its own line"
+    )
+    report.equal(
+        AgentPrompts.stripPreamble("Translation: The fine is 5000 yuan."),
+        "The fine is 5000 yuan.",
+        "a bare label is removed"
+    )
+    // The important half: it must not eat a real translation.
+    report.equal(
+        AgentPrompts.stripPreamble(
+            "The text of the agreement is binding on both parties."
+        ),
+        "The text of the agreement is binding on both parties.",
+        "a translation that merely starts with “The text” is left alone"
+    )
+    report.equal(
+        AgentPrompts.stripPreamble("The fine is 5000 yuan."),
+        "The fine is 5000 yuan.",
+        "and so is an ordinary one"
+    )
+    // If a preamble somehow survives, it is still reported rather than
+    // shipped as though it were the translation.
+    report.equal(
+        TextIntegrity.instructionLeak(
+            in: "The text \"合同\" translates to \"contract\"."
+        ),
+        "translates to",
+        "an announcement that survives is still a finding"
+    )
+
     report.begin("prompts/fences")
     report.equal(
         AgentPrompts.stripFences("```\n合同期限为三年。\n```"),

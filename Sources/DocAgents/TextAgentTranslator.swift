@@ -68,7 +68,8 @@ public struct TextAgentTranslator: TranslationEngine {
                 ) + 200
             )
         )
-        return AgentPrompts.stripFences(answer)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return AgentPrompts.stripPreamble(
+            AgentPrompts.stripFences(answer)
+        )
     }
 }

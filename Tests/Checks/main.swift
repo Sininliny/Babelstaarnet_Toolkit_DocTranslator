@@ -15,6 +15,13 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--sample" {
     exit(0)
 }
 
+// What Apple Vision makes of a page, printed rather than asserted. Needs no
+// model and no trait: `swift run Checks --ocr-probe`.
+if CommandLine.arguments.contains("--ocr-probe") {
+    await OCRProbe.run()
+    exit(0)
+}
+
 // The model checks download weights and need a GPU, so they are asked for
 // rather than included: `swift run --traits MLXEngine Checks --local-model`.
 #if MLXEngine
