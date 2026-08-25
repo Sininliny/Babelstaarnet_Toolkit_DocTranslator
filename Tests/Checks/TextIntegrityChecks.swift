@@ -80,6 +80,54 @@ func runTextIntegrityChecks(_ report: Report) {
         "a large figure written out is still reported"
     )
 
+    // A figure the source wrote in Chinese numerals is not an invention.
+    // Dates are on nearly every document, so getting this wrong means a
+    // caution on nearly every block.
+    report.expect(
+        !kinds("二〇二四年三月二十日", "20 March 2024")
+            .contains(.inventedNumber),
+        "a date written in Chinese numerals is not three invented figures"
+    )
+    report.expect(
+        !kinds("限你于三日内履行。", "Comply within 3 days.")
+            .contains(.inventedNumber),
+        "and neither is a small count"
+    )
+    report.expect(
+        !kinds("第十二条规定如下。", "Clause 12 provides as follows.")
+            .contains(.inventedNumber),
+        "十二 is twelve"
+    )
+    // A figure that is nowhere in the source, in any form, still is.
+    report.expect(
+        kinds("罚款金额见附件。", "The fine is 5000 yuan.")
+            .contains(.inventedNumber),
+        "a figure the source does not contain at all is still reported"
+    )
+
+    report.begin("integrity/numerals")
+    report.equal(
+        SimplifiedChinese.writtenForms(of: "2024"),
+        ["二〇二四"],
+        "a year is written digit by digit"
+    )
+    report.equal(
+        SimplifiedChinese.writtenForms(of: "20"),
+        ["二〇", "二十"],
+        "twenty has both forms"
+    )
+    report.equal(
+        SimplifiedChinese.writtenForms(of: "12"),
+        ["一二", "十二"],
+        "and so does twelve"
+    )
+    report.equal(
+        SimplifiedChinese.writtenForms(of: "10"),
+        ["一〇", "十"],
+        "ten is just 十"
+    )
+    report.begin("integrity")
+
     report.expect(
         kinds("请在三日内答复。", "请在三日内答复。").contains(.echoedSource),
         "text handed back untranslated must be caught"

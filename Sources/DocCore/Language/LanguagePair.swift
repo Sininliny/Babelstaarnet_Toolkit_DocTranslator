@@ -34,6 +34,18 @@ public struct SourceLanguage: Sendable {
     public let expansionRatio: ClosedRange<Double>
     /// How to name the language to a model.
     public let promptName: String
+    /// How this language writes a number in words, when it does.
+    ///
+    /// Needed because the integrity checks compare figures, and a language
+    /// that writes its dates as 二〇二四年三月二十日 has no digits in them at
+    /// all — so a correct translation reading "20 March 2024" looks like
+    /// three numbers invented out of nothing. Without this the check fires on
+    /// almost every dated document, and a check that cries wolf on every page
+    /// is one people learn to scroll past.
+    ///
+    /// Returns every form worth looking for; the caller only needs one of
+    /// them to appear.
+    public let writtenNumberForms: @Sendable (String) -> [String]
     /// Pack-supplied cleanup of one reader's raw text: the spaces Vision
     /// inserts between glyphs, the half-width punctuation a model
     /// substitutes, and anything else that is noise in this script but
@@ -50,6 +62,7 @@ public struct SourceLanguage: Sendable {
         sentenceRules: SentenceBoundaryRules,
         expansionRatio: ClosedRange<Double>,
         promptName: String,
+        writtenNumberForms: @escaping @Sendable (String) -> [String] = { _ in [] },
         normalizeReading: @escaping @Sendable (String) -> String = { $0 }
     ) {
         self.identifier = identifier
@@ -61,6 +74,7 @@ public struct SourceLanguage: Sendable {
         self.sentenceRules = sentenceRules
         self.expansionRatio = expansionRatio
         self.promptName = promptName
+        self.writtenNumberForms = writtenNumberForms
         self.normalizeReading = normalizeReading
     }
 

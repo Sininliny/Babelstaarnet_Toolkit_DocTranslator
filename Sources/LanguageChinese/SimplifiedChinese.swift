@@ -73,6 +73,7 @@ public enum SimplifiedChinese {
         // came back as one line or as three pages, not to grade prose.
         expansionRatio: 0.8...4.5,
         promptName: "Simplified Chinese",
+        writtenNumberForms: writtenForms(of:),
         normalizeReading: normalize(_:)
     )
 
@@ -128,6 +129,50 @@ public enum SimplifiedChinese {
             index += 1
         }
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static let numerals: [Character] = [
+        "〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"
+    ]
+
+    /// The ways Chinese writes a number, so a translation that turned one
+    /// into digits is not reported as having invented it.
+    ///
+    /// Two forms, because Chinese uses two. A year is written digit by digit
+    /// — 二〇二四 — and a count is written positionally: 二十 for twenty,
+    /// 十二 for twelve, 十 for ten. Above ninety-nine the positional form
+    /// needs 百, 千 and 万 and the composition stops being worth writing out
+    /// here; a document's large figures are nearly always printed as digits
+    /// anyway, which is the case the check is really for.
+    @Sendable
+    public static func writtenForms(of digits: String) -> [String] {
+        guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return [] }
+
+        // 二〇二四: every digit spelled, in order.
+        var perDigit = ""
+        for character in digits {
+            guard let value = character.wholeNumberValue,
+                  value >= 0, value < numerals.count else { return [] }
+            perDigit.append(numerals[value])
+        }
+
+        var forms = [perDigit]
+        if let value = Int(digits), value > 0, value < 100 {
+            forms.append(positional(value))
+        }
+        return forms
+    }
+
+    /// 1...99 in the ordinary counting form.
+    static func positional(_ value: Int) -> String {
+        if value < 10 { return String(numerals[value]) }
+        let tens = value / 10
+        let units = value % 10
+        var form = ""
+        if tens > 1 { form.append(numerals[tens]) }
+        form.append("十")
+        if units > 0 { form.append(numerals[units]) }
+        return form
     }
 
     static func isChinese(_ character: Character) -> Bool {

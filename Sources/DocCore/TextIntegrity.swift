@@ -134,7 +134,11 @@ public enum TextIntegrity {
         }
 
         findings.append(
-            contentsOf: numberFindings(source: trimmedSource, translation: trimmed)
+            contentsOf: numberFindings(
+                source: trimmedSource,
+                translation: trimmed,
+                language: language
+            )
         )
 
         // Length. The band is a property of the language pair, because how
@@ -216,7 +220,8 @@ public enum TextIntegrity {
     /// something this check is qualified to have an opinion about.
     static func numberFindings(
         source: String,
-        translation: String
+        translation: String,
+        language: SourceLanguage
     ) -> [IntegrityFinding] {
         var findings: [IntegrityFinding] = []
         var inSource = numberRuns(in: source)
@@ -267,10 +272,22 @@ public enum TextIntegrity {
                 )
             )
         }
-        // Only a caution: a source may write its numbers as words, and a
-        // correct translation is then entitled to a figure that is not in the
-        // source as digits.
-        for added in Set(inTranslation).sorted() {
+        // A figure the source wrote in its own numerals is not an invention.
+        // 二〇二四年三月二十日 contains no digits, and a translation reading
+        // "20 March 2024" would otherwise be reported as having made all
+        // three of them up.
+        let written = Set(
+            inTranslation.filter { number in
+                language.writtenNumberForms(number).contains {
+                    !$0.isEmpty && source.contains($0)
+                }
+            }
+        )
+
+        // Only a caution otherwise: a source may write its numbers as words,
+        // and a correct translation is then entitled to a figure that is not
+        // in the source as digits.
+        for added in Set(inTranslation).subtracting(written).sorted() {
             findings.append(
                 IntegrityFinding(
                     kind: .inventedNumber,
