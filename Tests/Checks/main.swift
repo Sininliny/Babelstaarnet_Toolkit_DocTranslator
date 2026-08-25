@@ -12,9 +12,9 @@ import DocMLX
 // copy instead of running the checks, so the layout-preserving export can be
 // looked at rather than only asserted about.
 if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--sample" {
-    try await Sample.write(
-        to: URL(fileURLWithPath: CommandLine.arguments[2])
-    )
+    let directory = URL(fileURLWithPath: CommandLine.arguments[2])
+    try await Sample.write(to: directory)
+    try await SampleForm.write(to: directory)
     exit(0)
 }
 
@@ -72,6 +72,7 @@ await runProfileChecks(report)
 runConfidenceChecks(report)
 runLanguageChecks(report)
 runExportChecks(report)
+runRenderChecks(report)
 await runPipelineChecks(report)
 await runEngineChecks(report)
 await runOutputModeChecks(report)

@@ -279,13 +279,51 @@ The pipeline is identical for all three; only what is written out differs.
 
 **The same document, in English** draws the translation back onto the page it
 came from. The background, stamps, photographs, rules and layout are the
-original pixels; each translated block has a patch the size of the original
-text painted in a background colour sampled from that block, with the English
-set in the sampled ink colour and shrunk to fit. Colours are measured with a
-histogram rather than an average, because averaging black text on white paper
-gives grey — the one colour that is neither. Text that would not fit even at
-the minimum size overruns the box downward rather than being clipped: a
-translation that overflows can be read, and one that is silently cut cannot.
+original pixels; each translated block has a patch painted in a background
+colour sampled from that block, with the English set in the sampled ink
+colour. Colours are measured with a histogram rather than an average, because
+averaging black text on white paper gives grey — the one colour that is
+neither. Text that would not fit even at the minimum size overruns the box
+downward rather than being clipped: a translation that overflows can be read,
+and one that is silently cut cannot.
+
+Two things are never translated, and on a form they are most of the page.
+Page numbers and running heads, as before — and any block with none of the
+source script in it. A results table is mostly figures: `68.4`, `0-450`,
+`mg/L`, `CFU/mL`. Handed to a translator they do not come back unchanged —
+`4` comes back `Four` and `mg/L` comes back `Mg/l` — and because this export
+replaces any block whose English differs from its source, a correct figure
+printed on the original page is painted over with a worse one. The figures are
+the point of a results table.
+
+The size is settled for a *run of type* rather than for a block. Fitted one at
+a time, every block on a page can be individually correct and the page still
+wrong: a heading shrunk to a caption because its English ran long, one row of
+a table at twice the size of the row under it because two words fell into a
+wide cell. Nothing on a page set that way is a mistake and none of it can be
+read at a glance, which is the failure a form makes obvious and a letter
+hides. So blocks are grouped by the height of the lines they were printed on —
+the only surviving record of the original type size, and why the reconciler
+carries a line count — and each group is set at one size. A block may be
+smaller than its run because its English will not fit at that size; it may
+never be larger because it happens to have room. Nothing that is not a heading
+is set much larger than the page's ordinary type however tall its box is,
+because a box far taller than everything around it is not large type — it is
+two rows the reader handed back as one block. A heading, for this purpose, is
+a block with its lines to itself: the classifier reads a one-word cell
+measured slightly taller than the row above it as a heading, which on a form
+is half the unit column, and set as one it comes out bold and larger in the
+middle of a table.
+
+What a block is allowed to use is the box the Chinese filled plus the empty
+paper beside it, stopping at the nearest thing printed on its own lines and at
+the edge of its column: the empty half of a two-column form is not empty
+paper. What gets *erased* is smaller again — the original text and the English
+replacing it, and nothing else. Erasing everything a block was allowed is what
+takes the rule between two columns off the page. And the page is erased once
+and written on afterwards, rather than a block at a time, because one row's
+patch reaches into the next and the row that disappears would be one that was
+already right.
 
 **Just the text** is the words in reading order and nothing else — no
 provenance header, no confidence marks, no markup to strip.
@@ -359,6 +397,12 @@ checkout with the tools alone.
   invisible; on a photograph it is a visible rectangle.
 - **More than two columns** are read as one. The gutter detector finds a single
   gutter.
+- **A dense form can be assembled into overlapping blocks.** Where the cells of
+  two adjacent rows are close enough to read as one run of text, the assembler
+  joins them, and the block it produces covers rows that other blocks also
+  claim. Nothing is lost — every block is still translated and still drawn —
+  but in the layout-preserving export the two print over each other, and in a
+  table that is where it shows.
 - **Handwriting** is out of scope for Vision's Chinese recognition and will
   read badly or not at all.
 - **The document profile is built from a sample, not the whole document.** A

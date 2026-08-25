@@ -134,6 +134,60 @@ func runPipelineChecks(_ report: Report) async {
         "the document records that two readers read it"
     )
 
+    report.begin("pipeline/figures")
+
+    // A form is mostly figures, and a figure is not a translation problem.
+    // Handed to a translator anyway, "4" comes back "Four" and "mg/L" comes
+    // back "Mg/l" — after which the layout-preserving export, which replaces
+    // any block whose English differs from its source, paints a worse figure
+    // over a correct one. The figures are the point of a results table.
+    let figures = BlockTranslator(
+        languages: languages,
+        translator: ScriptedTranslator { source in
+            switch source {
+            case "4": return "Four"
+            case "mg/L": return "Mg/l"
+            default: return "translated"
+            }
+        }
+    )
+    for printed in ["4", "mg/L", "0-450", "CFU/mL", "68.4"] {
+        let kept = await figures.translate(
+            ReconciledBlock(
+                pageIndex: 0,
+                order: 0,
+                box: BlockBox(x: 0.3, y: 0.3, width: 0.1, height: 0.02),
+                kind: .tableRow,
+                text: printed,
+                candidates: [.visionOCR: printed],
+                agreement: nil,
+                settlement: .single(.visionOCR)
+            )
+        )
+        report.equal(kept.text, printed, "\(printed) is kept as printed")
+        report.expect(
+            kept.findings.isEmpty,
+            "and is not reported as an untranslated block"
+        )
+    }
+    let translatedCell = await figures.translate(
+        ReconciledBlock(
+            pageIndex: 0,
+            order: 0,
+            box: BlockBox(x: 0.1, y: 0.3, width: 0.1, height: 0.02),
+            kind: .tableRow,
+            text: "21 酸碱度",
+            candidates: [.visionOCR: "21 酸碱度"],
+            agreement: nil,
+            settlement: .single(.visionOCR)
+        )
+    )
+    report.equal(
+        translatedCell.text,
+        "translated",
+        "a cell with Chinese in it is still translated"
+    )
+
     report.begin("pipeline/failures")
 
     // A translator that drops the figure must not produce a confident block,

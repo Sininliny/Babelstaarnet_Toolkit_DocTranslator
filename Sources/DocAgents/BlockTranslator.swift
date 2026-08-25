@@ -69,6 +69,28 @@ public struct BlockTranslator: Sendable {
             )
         }
 
+        // Neither is a block with no Simplified Chinese in it. A form is
+        // mostly figures — 68.4, 0-450, mg/L, CFU/mL — and handing them to a
+        // translator is not merely a wasted call per cell: they come back
+        // changed. "4" comes back "Four", "mg/L" comes back "Mg/l", and
+        // because the layout-preserving export replaces any block whose
+        // English differs from its source, a correct figure printed on the
+        // original page is painted over with a worse one. The whole point of
+        // a results table is its figures.
+        guard languages.source.scriptShare(of: block.text) > 0 else {
+            return TranslatedBlock(
+                source: block,
+                firstDraft: block.text,
+                confidence: Confidence(
+                    score: 1,
+                    reasons: [
+                        "No \(languages.source.englishName) in it, kept as "
+                            + "printed"
+                    ]
+                )
+            )
+        }
+
         let draft: String
         do {
             draft = try await translated(block, following: context)
