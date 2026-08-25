@@ -254,7 +254,7 @@ boundary.
 
 ```bash
 make build      # the package
-make test       # the privacy check, then 199 assertions
+make test       # the privacy check, then the whole suite
 make app        # dist/Læsesalen.app
 make install    # build and put it in /Applications
 

@@ -129,7 +129,7 @@ will accept can only be this machine.
 make test
 ```
 
-Runs the structural privacy check and 199 assertions — the layout logic, the
+Runs the structural privacy check and the whole suite — over two hundred assertions — the layout logic, the
 reconciler, the agents end to end against fixtures, the integrity checks, and
 Apple Vision actually reading a page of rendered Chinese. No models, no server,
 and no network: a fresh clone runs this.
