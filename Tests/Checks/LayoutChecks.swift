@@ -135,6 +135,27 @@ func runLayoutChecks(_ report: Report) {
         "furniture is never sent to a translator"
     )
 
+    // A short sentence set large is not a heading, however heading-shaped
+    // its box is.
+    let standfirst = BlockAssembly.classify(
+        [line("请勿在此区域吸烟。", x: 0.1, y: 0.1, width: 0.5, height: 0.05)],
+        box: BlockBox(x: 0.1, y: 0.1, width: 0.5, height: 0.05),
+        medianHeight: 0.02,
+        language: chinese
+    )
+    report.equal(
+        standfirst,
+        .paragraph,
+        "a line ending in 。 is a sentence, not a heading"
+    )
+    let title = BlockAssembly.classify(
+        [line("关于门禁系统升级的通知", x: 0.1, y: 0.1, width: 0.5, height: 0.05)],
+        box: BlockBox(x: 0.1, y: 0.1, width: 0.5, height: 0.05),
+        medianHeight: 0.02,
+        language: chinese
+    )
+    report.equal(title, .heading, "and a title with no stop still is one")
+
     for marker in ["1. 第一项", "（二）第二项", "第三条 规定如下", "• 要点"] {
         report.expect(
             BlockAssembly.isListItem(marker),

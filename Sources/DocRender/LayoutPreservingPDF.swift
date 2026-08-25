@@ -91,7 +91,13 @@ public enum LayoutPreservingPDF {
             context.draw(image.image, in: box)
 
             for block in page.blocks {
-                draw(block, on: image, in: box, into: context)
+                draw(
+                    block,
+                    among: page.blocks,
+                    on: image,
+                    in: box,
+                    into: context
+                )
             }
             context.endPage()
         }
@@ -102,6 +108,7 @@ public enum LayoutPreservingPDF {
 
     private static func draw(
         _ block: TranslatedBlock,
+        among neighbours: [TranslatedBlock],
         on page: PageImage,
         in box: CGRect,
         into context: CGContext
@@ -116,8 +123,24 @@ public enum LayoutPreservingPDF {
         // No geometry: see the note at the top of this file.
         guard block.source.box != .full else { return }
 
-        let frame = rect(for: block.source.box, in: box)
-        guard frame.width > 4, frame.height > 4 else { return }
+        let measured = rect(for: block.source.box, in: box)
+        guard measured.width > 4, measured.height > 4 else { return }
+
+        // The English may use the empty space beside the text it replaces.
+        //
+        // Without this every block is squeezed into the width of the Chinese
+        // it came from, and because English expands by different amounts in
+        // different blocks, each ends up at its own type size — a heading at
+        // half the size of the paragraph under it, every block individually
+        // "correct" and the page as a whole wrong. A ten-character Chinese
+        // heading becomes forty English characters; on a page with a wide
+        // right margin, a typesetter would simply set it wider.
+        let frame = CGRect(
+            x: measured.minX,
+            y: measured.minY,
+            width: roomToTheRight(of: block, among: neighbours, in: box),
+            height: measured.height
+        )
 
         let colours = PageColours.sample(
             page.image,
@@ -147,7 +170,12 @@ public enum LayoutPreservingPDF {
         let fitted = CTFramesetterCreateFrame(
             framesetter,
             CFRangeMake(0, 0),
-            grownIfNeeded(path, framesetter: framesetter, frame: frame, in: box),
+            grownIfNeeded(
+                path,
+                framesetter: framesetter,
+                frame: frame,
+                floor: roomBelow(block, among: neighbours, in: box)
+            ),
             nil
         )
         CTFrameDraw(fitted, context)
@@ -259,11 +287,57 @@ public enum LayoutPreservingPDF {
         return looksCentred ? .center : .left
     }
 
+    /// How much width a block may borrow: up to whatever is to its right,
+    /// stopping at the nearest neighbour that shares any of its lines.
+    static func roomToTheRight(
+        of block: TranslatedBlock,
+        among neighbours: [TranslatedBlock],
+        in box: CGRect
+    ) -> CGFloat {
+        let measured = rect(for: block.source.box, in: box)
+        // The page's own right-hand text margin, not the paper's edge:
+        // running out to the trim would look nothing like the original.
+        let margin = neighbours
+            .map { rect(for: $0.source.box, in: box).maxX }
+            .max() ?? measured.maxX
+
+        var limit = max(margin, measured.maxX)
+        for other in neighbours where other.id != block.id {
+            let rect = rect(for: other.source.box, in: box)
+            let sharesLines = rect.minY < measured.maxY
+                && rect.maxY > measured.minY
+            guard sharesLines, rect.minX >= measured.maxX else { continue }
+            limit = min(limit, rect.minX - measured.height * 0.35)
+        }
+        return max(measured.width, limit - measured.minX)
+    }
+
+    /// How far down a block may run before it would collide with the next
+    /// thing printed under it.
+    static func roomBelow(
+        _ block: TranslatedBlock,
+        among neighbours: [TranslatedBlock],
+        in box: CGRect
+    ) -> CGFloat {
+        let measured = rect(for: block.source.box, in: box)
+        var floor = box.minY
+        for other in neighbours where other.id != block.id {
+            let rect = rect(for: other.source.box, in: box)
+            let sharesColumn = rect.minX < measured.maxX
+                && rect.maxX > measured.minX
+            guard sharesColumn, rect.maxY <= measured.minY else { continue }
+            floor = max(floor, rect.maxY)
+        }
+        return floor
+    }
+
+    /// Text that will not fit its box runs past the bottom of it rather than
+    /// being clipped — but never into whatever is printed below.
     private static func grownIfNeeded(
         _ path: CGPath,
         framesetter: CTFramesetter,
         frame: CGRect,
-        in box: CGRect
+        floor: CGFloat
     ) -> CGPath {
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter,
@@ -275,9 +349,9 @@ public enum LayoutPreservingPDF {
         guard suggested.height > frame.height else { return path }
         let grown = CGRect(
             x: frame.minX,
-            y: max(box.minY, frame.maxY - suggested.height),
+            y: max(floor, frame.maxY - suggested.height),
             width: frame.width,
-            height: min(suggested.height, frame.maxY - box.minY)
+            height: min(suggested.height, frame.maxY - floor)
         )
         return CGPath(rect: grown, transform: nil)
     }

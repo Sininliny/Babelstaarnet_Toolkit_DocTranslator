@@ -50,7 +50,12 @@ public enum BlockAssembly {
                 pageIndex: pageIndex,
                 order: index,
                 box: box,
-                kind: classify(group, box: box, medianHeight: median),
+                kind: classify(
+                    group,
+                    box: box,
+                    medianHeight: median,
+                    language: language
+                ),
                 lines: group.map(\.text),
                 text: text,
                 confidence: group.map(\.confidence).reduce(0, +)
@@ -179,7 +184,8 @@ public enum BlockAssembly {
     public static func classify(
         _ lines: [RecognizedLine],
         box: BlockBox,
-        medianHeight: Double
+        medianHeight: Double,
+        language: SourceLanguage
     ) -> BlockKind {
         let text = lines.map(\.text).joined()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -195,9 +201,21 @@ public enum BlockAssembly {
 
         if isListItem(trimmed) { return .listItem }
 
+        // A heading does not end in a full stop. Without this, any short
+        // sentence set a little larger than the body — a standfirst, an
+        // emphasized clause, the one line of a notice that matters — comes
+        // out as a heading, and the translated document sets it in bold at
+        // the wrong size. The stops are the pack's, because what ends a
+        // sentence is a fact about the writing system: a Chinese one ends at
+        // 。, not at a period.
+        let endsASentence = trimmed.last.map {
+            language.sentenceTerminators.contains($0)
+        } ?? false
+
         // Bigger type than the page's body, and short enough to be a title
         // rather than a paragraph set in large type.
         if lines.count <= 2,
+           !endsASentence,
            box.height / Double(lines.count) > medianHeight * 1.3,
            trimmed.count <= 60 {
             return .heading
