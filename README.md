@@ -129,13 +129,18 @@ will accept can only be this machine.
 make test
 ```
 
-Runs the structural privacy check and 184 assertions — the layout logic, the
+Runs the structural privacy check and 199 assertions — the layout logic, the
 reconciler, the agents end to end against fixtures, the integrity checks, and
 Apple Vision actually reading a page of rendered Chinese. No models, no server,
 and no network: a fresh clone runs this.
 
-To check the app's own model as well — which downloads it and reads a page with
-it — `swift run --traits MLXEngine Checks --local-model`.
+Two more, for a build that has the app's own model. Both need the weights, so
+they are commands rather than part of the suite:
+
+```bash
+swift run --traits MLXEngine Checks --local-model      # it reads a page
+swift run --traits MLXEngine Checks --full-run ./out   # the whole app, on a page
+```
 
 ---
 

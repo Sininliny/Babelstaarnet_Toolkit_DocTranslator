@@ -1,4 +1,4 @@
-.PHONY: build build-mlx test check-privacy app app-mlx run install clean
+.PHONY: build build-mlx test check-privacy full-run app app-mlx run install clean
 
 build:
 	swift build
@@ -13,6 +13,11 @@ build-mlx:
 # and no network — a fresh clone runs this.
 test: check-privacy
 	swift run Checks
+
+# The whole app on a real page, with the real engines. Needs the weights and
+# a few minutes; not part of `make test` for exactly that reason.
+full-run:
+	MLX=1 ./Scripts/build-with-mlx.sh run Checks --full-run ./dist/run
 
 check-privacy:
 	./Scripts/check-privacy.sh

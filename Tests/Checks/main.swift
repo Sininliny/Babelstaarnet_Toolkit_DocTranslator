@@ -18,6 +18,14 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--sample" {
 // The model checks download weights and need a GPU, so they are asked for
 // rather than included: `swift run --traits MLXEngine Checks --local-model`.
 #if MLXEngine
+if CommandLine.arguments.count > 2,
+   CommandLine.arguments[1] == "--full-run" {
+    try await FullRun.run(
+        writingTo: URL(fileURLWithPath: CommandLine.arguments[2])
+    )
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--vlm-probe") {
     await VLMProbe.run()
     exit(0)
