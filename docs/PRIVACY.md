@@ -1,0 +1,78 @@
+# Privacy
+
+The claim is that a document you translate never leaves your Mac. Every app
+that handles private documents makes some version of that claim, and a reader
+has no way to check any of them from the outside. So this one is built to be
+checkable three ways.
+
+## 1. The default path cannot make a request
+
+The app's default engines are the models that ship with macOS: Apple Vision
+reads the page, Apple's on-device model reads it again and settles the
+disagreements, and the Translation framework translates. None of them is a
+network service. With the optional model server off — which is how the app
+ships — no code in the running app opens a socket at all.
+
+`SystemLanguageModel` is the on-device model. The Foundation Models framework
+also offers `PrivateCloudComputeLanguageModel`, which sends the prompt to
+Apple's servers, and the prompt here would be the reader's document. That name
+is banned from `Sources` by a check that fails the build.
+
+## 2. The only address the app can form is this machine
+
+The optional model server exists so that a Mac without Apple Intelligence, or a
+document a 3-billion-parameter model reads badly, is not a dead end. It is the
+one part of the app that opens a connection, and it is shaped so that "point it
+at my server" cannot become "point it at a server":
+
+- **`LoopbackEndpoint`** can only be constructed from a loopback address. It
+  classifies with the C resolver rather than by string prefix, so `127.1` and
+  `0177.0.0.1` are accepted, `127.0.0.1.example.com` is not, and `localhost` is
+  normalized to the literal rather than resolved — a hosts file cannot move it.
+- **`PrivateSession`** accepts nothing but a `LoopbackEndpoint`, and it is the
+  only type in the package that touches `URLSession`. Its configuration is
+  ephemeral (no cookie jar, no cache, no credential store), proxies are
+  explicitly disabled, and redirects are refused outright — a local server
+  answering 302 must not be able to forward the body of the request, and the
+  body of the request is your document.
+- **No other target links a networking API.** `Scripts/check-privacy.sh` fails
+  if one appears, so sending a page somewhere else would take a deliberate edit
+  to `Package.swift` first.
+
+## 3. The app keeps the receipts
+
+The lock in the corner of the window opens a ledger of every connection the app
+has opened this session: address, path, bytes each way, and outcome. With the
+built-in models the ledger is empty and stays empty, which is a stronger
+statement than any sentence in this file.
+
+## What is written to disk
+
+Nothing but what you save. There is no library, no recents list, no cache, no
+index, and no crash-recovery copy. The document is held for as long as it takes
+to translate it and let go when you start another. Preferences store the shape
+of your workflow — the output mode, whether to ask questions, standing
+instructions, the server address if you set one — and never a document's
+contents or its path.
+
+Exports are self-contained. The HTML export contains no link, font, image, or
+script from anywhere, so a translated page you open in a browser makes no
+request either. That is checked too.
+
+## What this does not protect you from
+
+Worth being plain about:
+
+- **Downloading a model is a download.** If macOS has not yet downloaded the
+  Chinese translation model, the app offers to ask macOS to fetch it. That is a
+  request to Apple for a model. Your document is not involved and is not sent.
+- **The optional model server is only as private as the server.** The app can
+  only reach `127.0.0.1`, but what a program on your machine does with what it
+  receives is that program's business. If you point Læsesalen at something on
+  loopback that forwards elsewhere, the ledger will show the app's side of it
+  and nothing more.
+- **Apple Intelligence is Apple's.** The on-device model runs on your Mac and
+  this app never invokes Private Cloud Compute, but the framework's own
+  behaviour is Apple's to document, not this project's to promise.
+- **A file you export is a file.** Once you save a translation, where it goes is
+  up to you and to whatever else has access to that folder.

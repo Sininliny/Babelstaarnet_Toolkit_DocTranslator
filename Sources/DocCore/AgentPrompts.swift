@@ -1,0 +1,427 @@
+import Foundation
+
+/// Every string this app is capable of sending to a model.
+///
+/// Collected in one file on purpose. The promise is that a document stays on
+/// the machine; the smaller promise underneath it is that the app does not
+/// send the model anything the user did not put in front of it. Both are
+/// easier to check when there is exactly one place to look, and the file is
+/// short enough to read in full.
+///
+/// The prompts are also where a design rule lives that is easy to lose: the
+/// adjudicator is a *chooser*, never a writer. See `adjudication`.
+public enum AgentPrompts {
+
+    // MARK: - Reading a page
+
+    public static func transcriptionInstructions(
+        for language: SourceLanguage
+    ) -> String {
+        """
+        You transcribe document pages. You copy what is printed; you never \
+        translate, summarize, correct, or explain it.
+
+        Rules:
+        - Reproduce the text in \(language.promptName) exactly as printed, \
+        including punctuation.
+        - Follow the page's reading order. Keep one paragraph per line.
+        - Skip page numbers and running heads.
+        - If a character is illegible, write ⍰ in its place rather than \
+        guessing a character that would fit.
+        - Output nothing but the transcription: no preamble, no commentary, \
+        no markdown fences.
+        """
+    }
+
+    public static func transcriptionRequest(
+        for language: SourceLanguage
+    ) -> String {
+        "Transcribe every line of \(language.promptName) text on this page."
+    }
+
+    /// A model's transcription into blocks.
+    ///
+    /// It returns text and no geometry, so its blocks carry the whole page as
+    /// their box. Nothing downstream aligns this reader on geometry — the
+    /// reconciler matches its paragraphs to the recognizer's by what they
+    /// say, which is the only thing the two have in common.
+    public static func blocks(
+        fromTranscription response: String,
+        pageIndex: Int,
+        language: SourceLanguage
+    ) -> [SourceBlock] {
+        let paragraphs = stripFences(response)
+            .components(separatedBy: "\n")
+            .map { language.normalizeReading($0) }
+            .filter { !$0.isEmpty }
+
+        return paragraphs.enumerated().map { index, text in
+            SourceBlock(
+                pageIndex: pageIndex,
+                order: index,
+                box: .full,
+                kind: .paragraph,
+                lines: [text],
+                text: text,
+                confidence: nil
+            )
+        }
+    }
+
+    /// Models wrap output in code fences however plainly they are told not
+    /// to, and a stray ``` in the source text would otherwise become part of
+    /// a translation.
+    public static func stripFences(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        while let first = lines.first,
+              first.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+            lines.removeFirst()
+        }
+        while let last = lines.last,
+              last.trimmingCharacters(in: .whitespaces).hasPrefix("```")
+                || last.trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.removeLast()
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Settling a disagreement
+
+    public static let choiceA = "A"
+    public static let choiceB = "B"
+    public static let adjudicationChoices = [choiceA, choiceB]
+
+    /// The adjudicator picks between two readings. It is never asked to write
+    /// a third.
+    ///
+    /// This is the most important restraint in the app. A model allowed to
+    /// *correct* a disputed line will, sometimes, produce a fluent sentence
+    /// that neither reader saw and that is not on the page — and nothing
+    /// downstream can catch that, because a hallucinated source sentence
+    /// translates perfectly, passes every integrity check, and reads better
+    /// than the truth. A model that can only choose between two candidates
+    /// can be wrong, but it can only ever be wrong about something that was
+    /// actually printed.
+    ///
+    /// So the cost of the restraint is a wrong choice now and then; the cost
+    /// of lifting it is a document that quietly says something the original
+    /// did not. The interface shows both candidates for exactly this reason.
+    public static func adjudicationInstructions(
+        for language: SourceLanguage
+    ) -> String {
+        """
+        Two systems read the same block of \(language.promptName) text from a \
+        scanned page and produced different results. Exactly one of them is \
+        closer to what is printed.
+
+        Judge by what is likely to be *printed*, not by what reads best:
+        - A reading whose characters make a grammatical, sensible sentence is \
+        usually the right one.
+        - A reading with a character that is visually similar to a sensible \
+        one but makes no sense is usually the misrecognition.
+        - Numbers, dates, and names cannot be judged this way. Where the two \
+        disagree only on a digit, prefer reading A, which came from a \
+        character recognizer rather than from a language model.
+
+        Answer with exactly one character: A or B. Nothing else.
+        """
+    }
+
+    public static func adjudicationPrompt(
+        contextBefore: String?,
+        candidateA: String,
+        candidateB: String
+    ) -> String {
+        var prompt = ""
+        if let contextBefore, !contextBefore.isEmpty {
+            prompt += "The block before this one reads:\n"
+                + String(contextBefore.suffix(200)) + "\n\n"
+        }
+        prompt += """
+            A: \(candidateA)
+
+            B: \(candidateB)
+
+            Which is closer to what is printed? Answer A or B.
+            """
+        return prompt
+    }
+
+    // MARK: - Translating
+
+    public static func translationInstructions(
+        languages: LanguagePair,
+        brief: TranslationBrief = .none
+    ) -> String {
+        let style = languages.target.styleGuidance
+            .map { "- " + $0 }
+            .joined(separator: "\n")
+        var instructions = """
+            You translate \(languages.source.promptName) into \
+            \(languages.target.promptName).
+
+            \(style)
+            - Output only the translation. No notes, no alternatives, no \
+            explanation of your choices, no quotation marks around the whole \
+            answer.
+            - If the text is a heading, translate it as a heading.
+            """
+
+        // The reader's instructions come after the house style and are
+        // stated as overriding it, because that is what they are for: an
+        // instruction that cannot beat a default is decoration.
+        if brief.isEmpty {
+            instructions += "\n- Never leave "
+                + "\(languages.source.promptName) characters in the output."
+        } else {
+            instructions += """
+
+                The reader has asked for the following. Where it conflicts \
+                with anything above, follow the reader:
+                \(brief.guidanceLines.map { "- " + $0 }.joined(separator: "\n"))
+                """
+        }
+        return instructions
+    }
+
+    public static func translationPrompt(
+        text: String,
+        kind: BlockKind,
+        documentContext: String?,
+        terms: [GlossaryTerm] = []
+    ) -> String {
+        var prompt = ""
+        // Only the terms that occur in this block. A glossary of two hundred
+        // entries repeated in front of every block is mostly noise, and a
+        // model that has to find the relevant line will sometimes apply the
+        // wrong one.
+        if !terms.isEmpty {
+            prompt += "For this text specifically:\n"
+                + terms.map { "- " + $0.instruction }
+                    .joined(separator: "\n")
+                + "\n\n"
+        }
+        if let documentContext, !documentContext.isEmpty {
+            prompt += "This is from a document titled: "
+                + String(documentContext.prefix(120)) + "\n\n"
+        }
+        if kind == .heading {
+            prompt += "Translate this heading:\n"
+        } else {
+            prompt += "Translate this text:\n"
+        }
+        return prompt + text
+    }
+
+    // MARK: - Reviewing
+
+    public static let verdictMarker = "VERDICT:"
+    public static let revisionMarker = "REVISION:"
+    public static let verdictAccurate = "ACCURATE"
+    public static let verdictRevise = "REVISE"
+
+    /// The reviewer reads the source and the draft together, and it *is*
+    /// allowed to rewrite — the draft is the app's own output, not the
+    /// user's document, so a rewrite cannot invent something the source never
+    /// said without the mechanical checks in `TextIntegrity` noticing.
+    public static func reviewInstructions(
+        languages: LanguagePair,
+        brief: TranslationBrief = .none
+    ) -> String {
+        var instructions = """
+        You check translations from \(languages.source.promptName) into \
+        \(languages.target.promptName). You are the second pair of eyes, not \
+        the translator: leave a sound translation alone.
+
+        Look for, in this order:
+        1. Meaning that changed — a negation dropped, a condition inverted, \
+        an obligation turned into a permission.
+        2. Anything in the source that is missing from the translation.
+        3. Anything in the translation that is not in the source.
+        4. Numbers, dates, names, and units that do not match.
+        5. \(languages.source.promptName) left untranslated.
+
+        Do not rewrite for style. Fluency is not a defect.
+
+        Answer in this exact form:
+        \(verdictMarker) \(verdictAccurate)
+        or
+        \(verdictMarker) \(verdictRevise)
+        \(revisionMarker) <the corrected translation, and nothing else>
+        """
+        guard !brief.isEmpty else { return instructions }
+        // The reviewer is given the brief too. A translator that quietly
+        // ignored an instruction and a reviewer that never heard of it will
+        // agree perfectly on a translation the reader did not ask for.
+        instructions += """
+
+            The reader asked for the following, and a translation that \
+            ignores it needs revising even if it is otherwise correct:
+            \(brief.guidanceLines.map { "- " + $0 }.joined(separator: "\n"))
+            """
+        return instructions
+    }
+
+    public static func reviewPrompt(
+        source: String,
+        draft: String,
+        languages: LanguagePair
+    ) -> String {
+        """
+        \(languages.source.promptName):
+        \(source)
+
+        \(languages.target.promptName):
+        \(draft)
+        """
+    }
+
+    /// What a reviewer said, recovered from an answer that may not have
+    /// followed the form.
+    public struct ReviewVerdict: Sendable, Equatable {
+        public let isAccurate: Bool
+        public let revision: String?
+
+        public init(isAccurate: Bool, revision: String?) {
+            self.isAccurate = isAccurate
+            self.revision = revision
+        }
+    }
+
+    // MARK: - Asking the reader
+
+    /// Questions raised before translating, not complaints filed after.
+    ///
+    /// The model is told to ask only about things that would change the
+    /// English. That constraint is the whole design: a model invited to be
+    /// curious will produce five interesting questions about any document,
+    /// the reader will answer them out of politeness, and the app will have
+    /// spent its one chance to interrupt on nothing.
+    public static func clarificationInstructions(
+        languages: LanguagePair
+    ) -> String {
+        """
+        You are about to translate a document from \
+        \(languages.source.promptName) into \(languages.target.promptName). \
+        Before you start, you may ask the reader up to three questions about \
+        it.
+
+        Ask only where the answer would change the \
+        \(languages.target.promptName) — an ambiguity that has two defensible \
+        translations, a term of art that means different things in different \
+        fields, a form of address whose register depends on who the document \
+        is for, a name that may be a person, a company, or a place.
+
+        Do not ask about anything you can settle by reading the text. Do not \
+        ask what the document is for out of interest. Do not ask about \
+        formatting. If nothing genuinely hangs on an answer, ask nothing.
+
+        For each question, offer two or three concrete options. Write each \
+        option as a short label, then a vertical bar, then the instruction a \
+        translator should follow if the reader picks it.
+
+        Answer in exactly this form and nothing else:
+
+        \(questionMarker) <the question>
+        \(evidenceMarker) <the phrase from the document that raises it>
+        \(optionMarker) <label> | <instruction for the translator>
+        \(optionMarker) <label> | <instruction for the translator>
+
+        Repeat the block for each further question. If you have no questions, \
+        answer with the single word \(noQuestionsMarker).
+        """
+    }
+
+    public static let questionMarker = "QUESTION:"
+    public static let evidenceMarker = "BECAUSE:"
+    public static let optionMarker = "OPTION:"
+    public static let noQuestionsMarker = "NONE"
+
+    public static func clarificationPrompt(sample: String) -> String {
+        """
+        Here is the beginning of the document:
+
+        \(sample)
+        """
+    }
+
+    /// The reader's own "I'm not sure" is appended to every question here
+    /// rather than asked for in the prompt, so a model cannot omit it.
+    public static func questions(
+        from answer: String,
+        limit: Int = 3
+    ) -> [ClarificationQuestion] {
+        let text = stripFences(answer)
+        guard !text.uppercased().hasPrefix(noQuestionsMarker) else { return [] }
+
+        var questions: [ClarificationQuestion] = []
+        var question: String?
+        var evidence: String?
+        var options: [ClarificationOption] = []
+
+        func flush() {
+            defer {
+                question = nil
+                evidence = nil
+                options = []
+            }
+            guard let question, !question.isEmpty, options.count >= 2 else {
+                return
+            }
+            questions.append(
+                ClarificationQuestion(
+                    question: question,
+                    options: options + [.unsure],
+                    evidence: evidence
+                )
+            )
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix(questionMarker) {
+                flush()
+                question = String(trimmed.dropFirst(questionMarker.count))
+                    .trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix(evidenceMarker) {
+                evidence = String(trimmed.dropFirst(evidenceMarker.count))
+                    .trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix(optionMarker) {
+                let body = String(trimmed.dropFirst(optionMarker.count))
+                let parts = body.components(separatedBy: "|")
+                guard parts.count >= 2 else { continue }
+                let label = parts[0].trimmingCharacters(in: .whitespaces)
+                let guidance = parts.dropFirst()
+                    .joined(separator: "|")
+                    .trimmingCharacters(in: .whitespaces)
+                guard !label.isEmpty, !guidance.isEmpty else { continue }
+                options.append(
+                    ClarificationOption(label: label, guidance: guidance)
+                )
+            }
+        }
+        flush()
+        return Array(questions.prefix(limit))
+    }
+
+    public static func verdict(from answer: String) -> ReviewVerdict {
+        let text = stripFences(answer)
+        let upper = text.uppercased()
+
+        guard let range = upper.range(of: revisionMarker) else {
+            // No revision offered. Treated as approval unless the model said
+            // otherwise — a reviewer that says "REVISE" and then supplies
+            // nothing has not reviewed anything, and its silence must not
+            // overwrite a translation with an empty string.
+            let saysRevise = upper.contains(verdictRevise)
+            return ReviewVerdict(isAccurate: !saysRevise, revision: nil)
+        }
+
+        let revision = String(text[range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !revision.isEmpty else {
+            return ReviewVerdict(isAccurate: false, revision: nil)
+        }
+        return ReviewVerdict(isAccurate: false, revision: revision)
+    }
+}

@@ -1,0 +1,25 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.hmap
+*.dSYM
+*.dSYM.zip
+
+# Local build artifacts
+.DS_Store
+build/
+dist/
+
+# Documents under test. Nothing a reader translates should ever be able to
+# reach a commit, so the whole scratch directory is ignored rather than the
+# file types anyone happens to have tried so far.
+Samples/private/
+
+# Personal Claude Code settings (machine-specific paths)
+.claude/settings.local.json
