@@ -212,6 +212,13 @@ public struct TranslatedDocument: Sendable, Identifiable {
     public let languages: LanguagePair
     public let pages: [TranslatedPage]
     public let engines: EngineRecord
+    /// What the app decided the document was before it translated a word of
+    /// it. Carried with the result because it is the single assumption every
+    /// block was translated under: a reader who can see "a court enforcement
+    /// notice" can tell at a glance that the app read a shipping invoice as
+    /// one, and a reader who cannot see it has no way to account for a whole
+    /// document rendered in the wrong register.
+    public let profile: DocumentProfile
     public let finishedAt: Date
 
     public init(
@@ -220,6 +227,7 @@ public struct TranslatedDocument: Sendable, Identifiable {
         languages: LanguagePair,
         pages: [TranslatedPage],
         engines: EngineRecord,
+        profile: DocumentProfile = .unknown,
         finishedAt: Date = Date()
     ) {
         self.id = id
@@ -227,6 +235,7 @@ public struct TranslatedDocument: Sendable, Identifiable {
         self.languages = languages
         self.pages = pages
         self.engines = engines
+        self.profile = profile
         self.finishedAt = finishedAt
     }
 

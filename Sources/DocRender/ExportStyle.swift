@@ -38,6 +38,13 @@ extension TranslatedDocument {
             "Nothing in this document was uploaded anywhere."
         ]
         lines.append("Read by: " + engines.readers.joined(separator: ", "))
+        // What the app took the document to be. It belongs with the rest of
+        // the provenance because it is provenance: every block in the export
+        // was translated on this assumption, and someone reading the English
+        // months later cannot infer it from the English.
+        if !profile.summary.isEmpty {
+            lines.append("Translated as: " + profile.summary)
+        }
         if let translator = engines.translator {
             lines.append("Translated by: " + translator)
         }

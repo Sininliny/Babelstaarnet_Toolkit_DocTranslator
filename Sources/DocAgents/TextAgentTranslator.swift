@@ -19,15 +19,18 @@ public struct TextAgentTranslator: TranslationEngine {
     private let agent: any TextAgent
     private let brief: TranslationBrief
     private let documentContext: String?
+    private let profile: DocumentProfile
 
     public init(
         agent: any TextAgent,
         brief: TranslationBrief = .none,
-        documentContext: String? = nil
+        documentContext: String? = nil,
+        profile: DocumentProfile = .unknown
     ) {
         self.agent = agent
         self.brief = brief
         self.documentContext = documentContext
+        self.profile = profile
     }
 
     public func status(for languages: LanguagePair) async -> EngineStatus {
@@ -47,18 +50,27 @@ public struct TextAgentTranslator: TranslationEngine {
     public func translate(
         _ text: String,
         kind: BlockKind,
-        languages: LanguagePair
+        languages: LanguagePair,
+        following context: TranslationContext = .none
     ) async throws -> String {
+        // The profile's terms are folded in as glossary entries so the
+        // translator sees one list rather than two, and the reader's own
+        // entries come last so they win where they disagree.
+        let agreed = profile.terms(appearingIn: text).map {
+            GlossaryTerm(term: $0.0, handling: .render($0.1))
+        }
         let answer = try await agent.answer(
             instructions: AgentPrompts.translationInstructions(
                 languages: languages,
-                brief: brief
+                brief: brief,
+                profile: profile
             ),
             prompt: AgentPrompts.translationPrompt(
                 text: text,
                 kind: kind,
                 documentContext: documentContext,
-                terms: brief.glossary(applyingTo: text)
+                terms: agreed + brief.glossary(applyingTo: text),
+                following: context
             ),
             // Room for the expansion the language pack expects, plus the
             // headroom a model needs not to stop mid-sentence.

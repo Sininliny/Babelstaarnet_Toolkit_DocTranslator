@@ -11,8 +11,12 @@ import Foundation
 struct ScriptedAgent: TextAgent {
     let engineName = "scripted"
     let isBuiltIn = false
-    /// Called with the prompt; returns the answer, or throws.
-    let answering: @Sendable (String, AnswerShape) throws -> String
+    /// Called with the instructions and the prompt; returns the answer, or
+    /// throws. The instructions are handed over too because several of the
+    /// things worth checking are things the pipeline is supposed to *tell*
+    /// the model — the document profile, the reader's brief — and a fake that
+    /// only sees the prompt cannot check any of them.
+    let answering: @Sendable (String, String, AnswerShape) throws -> String
 
     func status(for role: EngineRole) async -> EngineStatus {
         EngineStatus(
@@ -28,14 +32,21 @@ struct ScriptedAgent: TextAgent {
         prompt: String,
         expecting: AnswerShape
     ) async throws -> String {
-        try answering(prompt, expecting)
+        try answering(instructions, prompt, expecting)
+    }
+
+    /// The common case: an agent that does not care what it was asked.
+    static func replying(
+        _ answering: @escaping @Sendable (String, AnswerShape) throws -> String
+    ) -> ScriptedAgent {
+        ScriptedAgent { _, prompt, shape in try answering(prompt, shape) }
     }
 
     static func always(_ answer: String) -> ScriptedAgent {
-        ScriptedAgent { _, _ in answer }
+        ScriptedAgent { _, _, _ in answer }
     }
 
-    static let failing = ScriptedAgent { _, _ in
+    static let failing = ScriptedAgent { _, _, _ in
         throw AgentFailure.notAvailable("no model in this check")
     }
 }

@@ -62,6 +62,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var localModelProblem: String?
     /// The models already on this Mac, so the picker can say so.
     @Published public private(set) var downloadedModels: Set<String> = []
+    /// What the app decided the document is, applied to every sentence in it.
+    /// Shown because a wrong profile is a wrong translation of everything,
+    /// and the reader is the only one who can see that it is wrong.
+    @Published public private(set) var profile = DocumentProfile.unknown
     @Published public private(set) var openDocument: DocumentSource?
 
     /// What the reader has asked for on this document.
@@ -158,6 +162,7 @@ public final class AppModel: ObservableObject {
         cancel()
         translated = []
         progress = JobProgress()
+        profile = .unknown
         phase = .working
 
         job = Task { [weak self] in
@@ -262,6 +267,11 @@ public final class AppModel: ObservableObject {
             progress.activity = contested == 0
                 ? "The readers agreed on all \(blocks) blocks"
                 : "\(contested) of \(blocks) blocks needed settling"
+        case .readDocument(let profile):
+            self.profile = profile
+            progress.activity = profile.summary.isEmpty
+                ? "Read the document"
+                : "Read the document: " + profile.summary
         case .asking(let count):
             progress.activity = "Asking you \(count) question"
                 + (count == 1 ? "" : "s")

@@ -16,10 +16,8 @@ import Foundation
 /// who does. Asking them three questions costs one dialog; not asking costs a
 /// plausible translation of a document that says something else.
 public struct ClarificationAgent: Sendable {
-    /// How much of the document the question-asker reads. Enough to know what
-    /// kind of document it is, which is what the questions are about, and not
-    /// so much that a long document turns this into another full pass.
-    static let sampleLimit = 1_500
+    /// Below this there is not enough document to have a question about.
+    static let minimumSample = 40
 
     private let languages: LanguagePair
     private let agent: any TextAgent
@@ -35,11 +33,15 @@ public struct ClarificationAgent: Sendable {
         self.limit = limit
     }
 
+    /// - Parameter sample: the `DocumentSurvey`'s reading of the document —
+    ///   the same text the profile was built from. The questions worth asking
+    ///   are rarely all raised by the first page: a term of art that only
+    ///   turns up in the middle of a contract is exactly the kind of thing
+    ///   the reader can settle and the app cannot.
     public func questions(
-        about blocks: [ReconciledBlock]
+        from sample: String
     ) async -> [ClarificationQuestion] {
-        let sample = Self.sample(from: blocks)
-        guard sample.count >= 40 else { return [] }
+        guard sample.count >= Self.minimumSample else { return [] }
         do {
             let answer = try await agent.answer(
                 instructions: AgentPrompts.clarificationInstructions(
@@ -55,19 +57,5 @@ public struct ClarificationAgent: Sendable {
             // done before this stage existed.
             return []
         }
-    }
-
-    static func sample(from blocks: [ReconciledBlock]) -> String {
-        var sample = ""
-        for block in blocks where block.kind.isTranslatable {
-            if sample.count + block.text.count > sampleLimit {
-                sample += String(
-                    block.text.prefix(sampleLimit - sample.count)
-                )
-                break
-            }
-            sample += block.text + "\n"
-        }
-        return sample.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

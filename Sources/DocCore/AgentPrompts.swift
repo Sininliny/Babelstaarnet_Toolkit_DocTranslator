@@ -206,11 +206,107 @@ public enum AgentPrompts {
         return prompt
     }
 
+    // MARK: - Reading the whole document first
+
+    public static let kindMarker = "KIND:"
+    public static let subjectMarker = "SUBJECT:"
+    public static let registerMarker = "REGISTER:"
+    public static let termMarker = "TERM:"
+    public static let noteMarker = "NOTE:"
+
+    /// Asks what the document is before asking for a word of it to be
+    /// translated.
+    ///
+    /// The terms are the valuable part. A model asked to translate one
+    /// sentence at a time will render 甲方 as "Party A" here and "the first
+    /// party" three sentences later, and both readings are defensible on
+    /// their own line — which is why nothing downstream catches it and why
+    /// the document reads as though two people translated it. Deciding once,
+    /// in advance, and handing the decision to every call is the only thing
+    /// that fixes it.
+    public static func documentProfileInstructions(
+        languages: LanguagePair
+    ) -> String {
+        """
+        You are about to translate a document from \
+        \(languages.source.promptName) into \(languages.target.promptName). \
+        First, read it and say what it is, so that every sentence can be \
+        translated as part of the same document rather than on its own.
+
+        What you are shown is taken from across the document and marked with \
+        the page each part came from. It is not continuous: expect gaps \
+        between the parts, and do not try to account for them.
+
+        Answer in exactly this form and nothing else:
+
+        \(kindMarker) <what kind of document this is, a few words>
+        \(subjectMarker) <what it is about, one line>
+        \(registerMarker) <how the \(languages.target.promptName) should \
+        sound: formal legal, plain official, technical, personal>
+        \(termMarker) <a term in \(languages.source.promptName)> | <how it \
+        should be rendered every time it appears>
+        \(noteMarker) <anything a translator seeing only one sentence of \
+        this would get wrong>
+
+        Give up to eight TERM lines. Choose the terms that recur and that \
+        have more than one defensible translation — parties, defined terms, \
+        terms of art, names of bodies. Do not list words with only one \
+        possible rendering; a glossary of the obvious crowds out the entries \
+        that matter.
+
+        Give at most three NOTE lines, and none at all if nothing needs \
+        saying.
+        """
+    }
+
+    public static func documentProfilePrompt(sample: String) -> String {
+        """
+        Here is the document:
+
+        \(sample)
+        """
+    }
+
+    public static func profile(from answer: String) -> DocumentProfile {
+        var profile = DocumentProfile()
+        for line in stripFences(answer).components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            func value(_ marker: String) -> String {
+                String(trimmed.dropFirst(marker.count))
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            if trimmed.hasPrefix(kindMarker) {
+                profile.kind = value(kindMarker)
+            } else if trimmed.hasPrefix(subjectMarker) {
+                profile.subject = value(subjectMarker)
+            } else if trimmed.hasPrefix(registerMarker) {
+                profile.register = value(registerMarker)
+            } else if trimmed.hasPrefix(noteMarker) {
+                let note = value(noteMarker)
+                if !note.isEmpty, profile.notes.count < 3 {
+                    profile.notes.append(note)
+                }
+            } else if trimmed.hasPrefix(termMarker) {
+                let parts = value(termMarker).components(separatedBy: "|")
+                guard parts.count >= 2 else { continue }
+                let source = parts[0].trimmingCharacters(in: .whitespaces)
+                let target = parts.dropFirst()
+                    .joined(separator: "|")
+                    .trimmingCharacters(in: .whitespaces)
+                guard !source.isEmpty, !target.isEmpty,
+                      profile.terms.count < 8 else { continue }
+                profile.terms[source] = target
+            }
+        }
+        return profile
+    }
+
     // MARK: - Translating
 
     public static func translationInstructions(
         languages: LanguagePair,
-        brief: TranslationBrief = .none
+        brief: TranslationBrief = .none,
+        profile: DocumentProfile = .unknown
     ) -> String {
         let style = languages.target.styleGuidance
             .map { "- " + $0 }
@@ -229,6 +325,17 @@ public enum AgentPrompts {
             - Never repeat the \(languages.source.promptName) back.
             - If the text is a heading, translate it as a heading.
             """
+
+        // What the document is, before what the reader asked for: the
+        // profile is the app's own reading and the brief is the reader's
+        // decision, and where they disagree the reader wins.
+        if !profile.isEmpty {
+            instructions += """
+
+                What you are translating:
+                \(profile.guidanceLines().map { "- " + $0 }.joined(separator: "\n"))
+                """
+        }
 
         // The reader's instructions come after the house style and are
         // stated as overriding it, because that is what they are for: an
@@ -251,9 +358,23 @@ public enum AgentPrompts {
         text: String,
         kind: BlockKind,
         documentContext: String?,
-        terms: [GlossaryTerm] = []
+        terms: [GlossaryTerm] = [],
+        following context: TranslationContext = .none
     ) -> String {
         var prompt = ""
+        // The sentence before this one, and what it was translated as. The
+        // English half is what keeps a recurring term rendered the same way
+        // twenty sentences apart, and what lets a pronoun or a "the said
+        // party" resolve to something.
+        if let source = context.previousSource, !source.isEmpty {
+            prompt += "The previous sentence reads:\n"
+                + String(source.suffix(200)) + "\n"
+            if let target = context.previousTarget, !target.isEmpty {
+                prompt += "You translated it as:\n"
+                    + String(target.suffix(200)) + "\n"
+            }
+            prompt += "\nTranslate only what follows.\n\n"
+        }
         // Only the terms that occur in this block. A glossary of two hundred
         // entries repeated in front of every block is mostly noise, and a
         // model that has to find the relevant line will sometimes apply the
@@ -287,9 +408,16 @@ public enum AgentPrompts {
     /// allowed to rewrite — the draft is the app's own output, not the
     /// user's document, so a rewrite cannot invent something the source never
     /// said without the mechanical checks in `TextIntegrity` noticing.
+    /// - Parameter agreedTerms: the renderings the document settled on that
+    ///   occur in *this* block. The reviewer has no glossary of its own — it
+    ///   is handed a source and a draft — so if it is not told here that the
+    ///   document already calls 被执行人 something, it will read a block that
+    ///   calls it something else and approve it, correctly, on its own terms.
     public static func reviewInstructions(
         languages: LanguagePair,
-        brief: TranslationBrief = .none
+        brief: TranslationBrief = .none,
+        profile: DocumentProfile = .unknown,
+        agreedTerms: [String] = []
     ) -> String {
         var instructions = """
         You check translations from \(languages.source.promptName) into \
@@ -312,6 +440,17 @@ public enum AgentPrompts {
         \(verdictMarker) \(verdictRevise)
         \(revisionMarker) <the corrected translation, and nothing else>
         """
+        if !profile.isEmpty {
+            let lines = profile.guidanceLines() + agreedTerms
+            instructions += """
+
+                This block is part of a larger document:
+                \(lines.map { "- " + $0 }.joined(separator: "\n"))
+                A rendering that disagrees with the rest of the document is a \
+                defect even when it is defensible on its own. You are seeing \
+                one block; the reader will see all of them together.
+                """
+        }
         guard !brief.isEmpty else { return instructions }
         // The reviewer is given the brief too. A translator that quietly
         // ignored an instruction and a reviewer that never heard of it will
@@ -400,9 +539,15 @@ public enum AgentPrompts {
     public static let optionMarker = "OPTION:"
     public static let noQuestionsMarker = "NONE"
 
+    /// - Parameter sample: text taken from across the document, marked with
+    ///   the page each part came from. Not the beginning of it: the question
+    ///   worth asking is as likely to be raised by a defined term on page
+    ///   nine as by the letterhead, and it still has to be asked before page
+    ///   one is translated.
     public static func clarificationPrompt(sample: String) -> String {
         """
-        Here is the beginning of the document:
+        Here is the document. It is taken from across it and marked with the \
+        page each part came from, so expect gaps between the parts.
 
         \(sample)
         """

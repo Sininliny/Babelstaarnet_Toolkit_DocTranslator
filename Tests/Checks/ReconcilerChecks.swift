@@ -26,7 +26,7 @@ func runReconcilerChecks(_ report: Report) async {
     // Agreement needs no model at all.
     let unanimous = await Reconciler(
         language: chinese,
-        adjudicator: ScriptedAgent { _, _ in
+        adjudicator: ScriptedAgent.replying { _, _ in
             throw AgentFailure.refused("the adjudicator must not be called")
         }
     ).reconcile(
@@ -105,7 +105,7 @@ func runReconcilerChecks(_ report: Report) async {
     // A disagreement that is only about figures never reaches a model.
     let figures = await Reconciler(
         language: chinese,
-        adjudicator: ScriptedAgent { _, _ in
+        adjudicator: ScriptedAgent.replying { _, _ in
             throw AgentFailure.refused(
                 "a figure disagreement must not be put to a model"
             )
@@ -152,7 +152,7 @@ func runReconcilerChecks(_ report: Report) async {
     // The PDF's own text settles without a model, whatever OCR saw.
     let authoritative = await Reconciler(
         language: chinese,
-        adjudicator: ScriptedAgent { _, _ in
+        adjudicator: ScriptedAgent.replying { _, _ in
             throw AgentFailure.refused("the text layer must not need a model")
         }
     ).reconcile(
