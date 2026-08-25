@@ -117,3 +117,175 @@ enum Fixtures {
         }
     }
 }
+
+/// A form rather than a page of prose.
+///
+/// The letter in `Sample` is the easy case for the layout-preserving export:
+/// wide blocks, one after another down a single column, each with room under
+/// it. A form is the hard one, and it is what most documents anyone actually
+/// needs translated look like — two columns of cells, a label an inch wide
+/// with a figure printed hard against it, rules between them, and twenty rows
+/// where the run of type has to stay one size or the page falls apart.
+///
+/// Fabricated: a water analysis with invented figures, chosen because the
+/// shape is what matters here — short labels beside long ones, single
+/// characters beside phrases, and a right-hand column that runs out of rows
+/// long before the left one does, which is what leaves a block free to
+/// sprawl into empty paper.
+extension Fixtures {
+    struct Row {
+        let number: String
+        let label: String
+        let result: String
+        let reference: String
+        let unit: String
+
+        init(
+            _ number: String,
+            _ label: String,
+            _ result: String,
+            _ reference: String,
+            _ unit: String
+        ) {
+            self.number = number
+            self.label = label
+            self.result = result
+            self.reference = reference
+            self.unit = unit
+        }
+    }
+
+    static let tableHeader = Row("No", "项目", "结果", "参考值", "单位")
+
+    static let tableLeft = [
+        Row("1", "总硬度", "68.4", "0-450", "mg/L"),
+        Row("2", "溶解性总固体", "312.5", "0-1000", "mg/L"),
+        Row("3", "耗氧量", "1.42", "0-3.0", "mg/L"),
+        Row("4", "浑浊度", "0.31", "0-1.0", "NTU"),
+        Row("5", "色度", "4", "0-15", "度"),
+        Row("6", "挥发性酚类", "0.001", "0-0.002", "mg/L"),
+        Row("7", "阴离子合成洗涤剂", "0.05", "0-0.3", "mg/L"),
+        Row("8", "氨氮", "0.08", "0-0.5", "mg/L"),
+        Row("9", "硝酸盐氮", "2.31", "0-10.0", "mg/L"),
+        Row("10", "亚硝酸盐氮", "0.004", "0-1.0", "mg/L"),
+        Row("11", "氯化物", "24.6", "0-250", "mg/L"),
+        Row("12", "硫酸盐", "41.2", "0-250", "mg/L"),
+        Row("13", "铁", "0.12", "0-0.3", "mg/L"),
+        Row("14", "锰", "0.02", "0-0.1", "mg/L"),
+        Row("15", "铜", "0.008", "0-1.0", "mg/L"),
+        Row("16", "挥发性有机化合物总量", "0.015", "0-0.05", "mg/L"),
+        Row("17", "菌落总数", "12", "0-100", "CFU/mL"),
+        Row("18", "游离氯", "0.35", "0.3-4.0", "mg/L"),
+        Row("19", "碱度", "96.0", "0-200", "mg/L"),
+        Row("20", "钠", "18.7", "0-200", "mg/L")
+    ]
+
+    static let tableRight = [
+        Row("21", "酸碱度", "7.42", "6.5-8.5", ""),
+        Row("22", "电导率", "486", "0-2000", "μS/cm"),
+        Row("23", "钙", "41.8", "0-200", "mg/L"),
+        Row("24", "镁", "12.3", "0-100", "mg/L")
+    ]
+
+    static let tableNote = "注释：碱度的参考值：0.-200"
+
+    /// The whole form, drawn at the size a scan of one would be.
+    static func table(
+        size: CGSize = CGSize(width: 1_400, height: 1_000),
+        fontSize: CGFloat = 26
+    ) -> CGImage? {
+        guard let context = CGContext(
+            data: nil,
+            width: Int(size.width),
+            height: Int(size.height),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(origin: .zero, size: size))
+        context.setFillColor(gray: 0, alpha: 1)
+        context.textMatrix = .identity
+
+        let leading = fontSize * 1.55
+        let top = size.height - 60
+        // Where each cell in a half begins, as an offset from the half's own
+        // left edge. A label column wide enough for four Chinese characters
+        // and no wider is the whole difficulty of this page.
+        let cells: [CGFloat] = [0, 40, 300, 400, 560]
+        let halves: [CGFloat] = [60, 740]
+
+        func draw(_ row: Row, half: CGFloat, baseline: CGFloat) {
+            let texts = [
+                row.number, row.label, row.result, row.reference, row.unit
+            ]
+            for (index, text) in texts.enumerated() where !text.isEmpty {
+                let attributed = NSAttributedString(
+                    string: text,
+                    attributes: [
+                        .font: CTFontCreateWithName(
+                            font as CFString,
+                            fontSize,
+                            nil
+                        ),
+                        .foregroundColor: CGColor(gray: 0, alpha: 1)
+                    ]
+                )
+                context.textPosition = CGPoint(
+                    x: half + cells[index],
+                    y: baseline
+                )
+                CTLineDraw(
+                    CTLineCreateWithAttributedString(attributed),
+                    context
+                )
+            }
+        }
+
+        for (index, half) in halves.enumerated() {
+            draw(tableHeader, half: half, baseline: top)
+            let rows = index == 0 ? tableLeft : tableRight
+            for (step, row) in rows.enumerated() {
+                draw(
+                    row,
+                    half: half,
+                    baseline: top - leading * CGFloat(step + 1)
+                )
+            }
+        }
+
+        // The rules. They are not text, nothing reads them, and they are the
+        // first thing to go when a block erases more of the page than it
+        // covers.
+        context.setStrokeColor(gray: 0, alpha: 1)
+        context.setLineWidth(2)
+        context.move(to: CGPoint(x: 50, y: top - leading * 0.45))
+        context.addLine(to: CGPoint(x: size.width - 40, y: top - leading * 0.45))
+        context.move(to: CGPoint(x: 700, y: top + fontSize))
+        context.addLine(
+            to: CGPoint(x: 700, y: top - leading * CGFloat(tableLeft.count + 1))
+        )
+        context.strokePath()
+
+        let note = NSAttributedString(
+            string: tableNote,
+            attributes: [
+                .font: CTFontCreateWithName(
+                    font as CFString,
+                    fontSize * 0.85,
+                    nil
+                ),
+                .foregroundColor: CGColor(gray: 0, alpha: 1)
+            ]
+        )
+        context.textPosition = CGPoint(
+            x: 60,
+            y: top - leading * CGFloat(tableLeft.count + 2)
+        )
+        CTLineDraw(CTLineCreateWithAttributedString(note), context)
+
+        return context.makeImage()
+    }
+}
