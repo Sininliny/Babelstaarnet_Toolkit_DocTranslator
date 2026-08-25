@@ -102,6 +102,53 @@ func runReconcilerChecks(_ report: Report) async {
         "with no model, the recognizer's reading stands"
     )
 
+    // A disagreement that is only about figures never reaches a model.
+    let figures = await Reconciler(
+        language: chinese,
+        adjudicator: ScriptedAgent { _, _ in
+            throw AgentFailure.refused(
+                "a figure disagreement must not be put to a model"
+            )
+        }
+    ).reconcile(
+        readings: [
+            reading(.visionOCR, ["罚款为5000元，编号为12345。"]),
+            reading(.visionLanguageModel, ["罚款为500元，编号为1234。"])
+        ],
+        pageIndex: 0
+    )
+    report.equal(
+        figures.first?.text,
+        "罚款为5000元，编号为12345。",
+        "the recognizer's figures win without a vote"
+    )
+    report.expect(
+        figures.first?.settlement.neededAModel == false,
+        "and no model was asked"
+    )
+
+    // But a disagreement about the words still goes to the adjudicator, even
+    // when there are numbers in the block.
+    let words = await Reconciler(
+        language: chinese,
+        adjudicator: ScriptedAgent.always("B")
+    ).reconcile(
+        readings: [
+            reading(.visionOCR, ["罚款为5000元，编号为12345。"]),
+            reading(.visionLanguageModel, ["罚金为5000元，编号为12345。"])
+        ],
+        pageIndex: 0
+    )
+    report.expect(
+        words.first?.settlement.neededAModel == true,
+        "a disagreement about the words is still adjudicated"
+    )
+
+    report.expect(
+        Reconciler.differOnlyOnFigures("甲方为公司", "甲方为公司") == false,
+        "identical readings do not differ on figures"
+    )
+
     // The PDF's own text settles without a model, whatever OCR saw.
     let authoritative = await Reconciler(
         language: chinese,

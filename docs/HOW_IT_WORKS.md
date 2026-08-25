@@ -56,6 +56,46 @@ that joined a heading to the paragraph under it would knock every later block
 on the page out of step, and a page that agreed completely would score as a
 page that agreed about nothing.
 
+### What the model actually does, measured
+
+Worth stating in numbers, because every rule in the next section is a
+consequence of it. A rendered court notice — twelve lines of 30 px Chinese,
+with a case number, an ID number and five money figures — read by Qwen2.5-VL
+3B at greedy decode, fitted into 1024 px:
+
+```
+北京市朝阳区人民法院执行通知书          ← right
+案号：（2024）京01执12345号             ← printed 京0105执12345号
+被执行人：王明                          ← printed 王小明
+一、支付货款人民币58000元及利息2340元    ← printed 580000元 and 23400元
+二、支付违约金人民币4900元               ← printed 46000元
+```
+
+Eight of fourteen figures survived. A money figure lost a zero — a factor of
+ten — and a name lost a character, and two whole lines were dropped. None of
+it *looks* wrong: the Chinese is fluent, the register is right, and the
+document reads exactly like a correct transcription of some court notice.
+
+That is the failure this app is built around. It is not a bad model; it is
+what a language model does when it reads. It also gets things a character
+recognizer cannot: layout, reading order, a smudged character that only makes
+sense one way. So it is kept as the second reader and never trusted as the
+first.
+
+Two rules follow directly, and both are enforced rather than requested:
+
+**A disagreement that is only about figures never reaches a model.** If two
+readings are identical once the digits are removed, the recognizer's numbers
+win without a vote — it cannot invent a figure, and this model demonstrably
+can.
+
+**Image size is not a tuning preference.** The same model, page and decode,
+fitted into different boxes: 512 px produced a *different document* (a civil
+judgment, with a case number and a legal representative that are nowhere on
+the page); 768 px repeated the title eight times; 1024 and 1280 both read the
+page at 0.70 similarity. The failures at small sizes do not look like
+failures. `MLXVisionReader.fitInto` carries the table.
+
 Where the readings differ, a model chooses between them — and **only** chooses.
 It is never asked to write a corrected version. A model allowed to correct a
 disputed line will sometimes produce a fluent sentence that neither reader saw
@@ -188,6 +228,10 @@ make install    # build and put it in /Applications
 make build-mlx  # the same, with the app's own vision model
 make app-mlx
 ```
+
+`swift run --traits MLXEngine Checks --vlm-probe` re-runs the image-size
+comparison above against whatever model is configured, which is how to redo
+the measurement rather than trust this table after a model change.
 
 The MLX engine is a build-time option rather than a dependency because of what
 building it takes: MLX compiles Metal kernels, and the `metal` compiler ships

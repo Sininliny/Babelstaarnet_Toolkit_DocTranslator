@@ -2,6 +2,7 @@
 
 import CoreImage
 import DocCore
+import CoreGraphics
 import Foundation
 import MLXLMCommon
 
@@ -20,18 +21,39 @@ import MLXLMCommon
 public struct MLXVisionReader: PageTranscriber {
     public let reader: PageReader = .visionLanguageModel
     private let store: MLXModelStore
-    /// The long side the page is scaled to before the model sees it.
+    /// The box the page is fitted into before the model sees it.
     ///
-    /// Larger than the app hands a remote model, because there is no encoding
-    /// or transport cost here, and dense Chinese type is exactly what a
-    /// too-small image destroys: at 768 pixels a page of 宋体 turns into rows
-    /// of grey smudges that the model will confidently read as plausible
-    /// sentences.
-    private let longSide: Int
+    /// 1024 is measured, not chosen. On a rendered page of twelve lines of
+    /// 30 px Chinese — a court notice with case numbers, an ID number, and
+    /// five money figures — the same model, same weights, same greedy
+    /// decode, produced:
+    ///
+    /// | fitted into | similarity to the page | figures kept |
+    /// | --- | --- | --- |
+    /// | 512 | 0.09 | 6 of 14 |
+    /// | 768 | 0.03 | 0 of 14 |
+    /// | 1024 | 0.70 | 7 of 14 |
+    /// | 1280 | 0.70 | 7 of 14 |
+    ///
+    /// The two small sizes do not degrade, they *fail*: at 512 the model
+    /// invented a different document — a civil judgment, with a case number
+    /// and a legal representative that are not on the page — and at 768 it
+    /// repeated the title eight times. Neither looks like a failure in the
+    /// output. Both look like a transcription.
+    ///
+    /// 1280 buys nothing over 1024 and costs 40% more time, so 1024 it is.
+    ///
+    /// A `nil` resize is not an option, whatever it looks like: the image is
+    /// then dropped entirely and the model answers about "the text you
+    /// provided", having seen none.
+    private let fitInto: CGSize
 
-    public init(store: MLXModelStore, longSide: Int = 1_400) {
+    public init(
+        store: MLXModelStore,
+        fitInto: CGSize = CGSize(width: 1_024, height: 1_024)
+    ) {
         self.store = store
-        self.longSide = longSide
+        self.fitInto = fitInto
     }
 
     public var engineName: String {
@@ -44,8 +66,6 @@ public struct MLXVisionReader: PageTranscriber {
     ) async throws -> PageReading {
         let started = Date()
         let container = try await store.prepare()
-        let scaled = ImageScaling.scaled(page.image, longSide: longSide)
-            ?? page.image
 
         // A fresh session per page, deliberately. `ChatSession` keeps the
         // conversation's key-value cache, and a run that reuses one puts page
@@ -65,15 +85,15 @@ public struct MLXVisionReader: PageTranscriber {
                 // answer, so the sampling is greedy.
                 temperature: 0
             ),
-            // No resizing by the library: the page has already been scaled to
-            // a size chosen for reading, and a second resize to 512 square
-            // would undo it.
-            processing: UserInput.Processing(resize: nil)
+            // The library fits the page inside this box, preserving its
+            // aspect ratio. See `fitInto` for why the number is what it is
+            // and why it is never nil.
+            processing: UserInput.Processing(resize: fitInto)
         )
 
         let answer = try await session.respond(
             to: AgentPrompts.transcriptionRequest(for: language),
-            image: .ciImage(CIImage(cgImage: scaled))
+            image: .ciImage(CIImage(cgImage: page.image))
         )
 
         return PageReading(

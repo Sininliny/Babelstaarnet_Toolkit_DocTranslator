@@ -1,5 +1,6 @@
 #if MLXEngine
 
+import CoreGraphics
 import DocCore
 import Foundation
 import MLXLMCommon
@@ -75,7 +76,12 @@ public struct MLXTextAgent: TextAgent {
                 maxTokens: Self.tokenBudget(for: expecting),
                 temperature: Self.temperature(self.temperature, for: expecting)
             ),
-            processing: UserInput.Processing(resize: nil)
+            // No image in a text call, so the processing is nominal — but
+            // it is set rather than nil, because nil is the value that
+            // silently drops media when there is any.
+            processing: UserInput.Processing(
+                resize: CGSize(width: 1_024, height: 1_024)
+            )
         )
 
         let answer = try await session.respond(to: prompt)

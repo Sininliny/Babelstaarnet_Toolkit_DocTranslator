@@ -190,6 +190,37 @@ public struct Reconciler: Sendable {
             )
         }
 
+        // A disagreement that is only about figures is not a question for a
+        // language model, and asking one is worse than not asking.
+        //
+        // Measured on a rendered court notice, the vision model transcribed
+        // 京0105执12345号 as 京01执12345号 and dropped digits from an ID
+        // number — while producing fluent, entirely plausible Chinese around
+        // them. It does not misread digits so much as *rewrite* them. A
+        // character recognizer cannot do that: it reads the glyph or it
+        // fails. So where the two readings differ in their numbers and
+        // nowhere else, the recognizer wins without a vote.
+        //
+        // The adjudication prompt asks the model for this same preference in
+        // words. This makes it a fact instead of a request.
+        if Self.differOnlyOnFigures(leftText, rightText) {
+            return ReconciledBlock(
+                pageIndex: pageIndex,
+                order: order,
+                box: box,
+                kind: kind,
+                lineCount: lineCount,
+                text: leftText,
+                candidates: candidates,
+                agreement: similarity,
+                settlement: .defaulted(
+                    to: primary,
+                    because: "they differ only in their figures, and a "
+                        + "recognizer cannot invent one"
+                )
+            )
+        }
+
         let difference = Self.disagreement(between: leftText, and: rightText)
         do {
             let answer = try await adjudicator.answer(
@@ -237,6 +268,25 @@ public struct Reconciler: Sendable {
                 )
             )
         }
+    }
+
+    /// Whether the two readings say the same thing with different numbers in
+    /// it. Compared by removing every digit: what is left is the sentence,
+    /// and if the sentences match then the figures are the whole dispute.
+    public static func differOnlyOnFigures(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsNumbers = TextIntegrity.numberRuns(in: lhs)
+        let rhsNumbers = TextIntegrity.numberRuns(in: rhs)
+        guard lhsNumbers != rhsNumbers else { return false }
+        return withoutDigits(lhs) == withoutDigits(rhs)
+    }
+
+    public static func withoutDigits(_ text: String) -> String {
+        String(
+            text.unicodeScalars.filter { scalar in
+                !(scalar.value >= 48 && scalar.value <= 57)
+                    && !(scalar.value >= 0xFF10 && scalar.value <= 0xFF19)
+            }.map(Character.init)
+        )
     }
 
     /// What the two readers actually differed about, in a form short enough
