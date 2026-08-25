@@ -14,7 +14,9 @@ the ones that came with macOS.
 **Two readers, not one.** A character recognizer and a vision-language model
 read every page independently, and their failure modes do not overlap — Vision
 confuses 未 and 末; a language model does not, because the sentence only works
-one way. Where they agree, that is evidence. Where they disagree, the app says
+one way. The app can carry its own vision model and run it in this process on
+the Mac's GPU, so the second reader does not depend on what Apple has decided
+this Mac is eligible for. Where they agree, that is evidence. Where they disagree, the app says
 so and shows you both readings rather than picking quietly. Where the PDF
 carries its own text, neither of them has to guess.
 
@@ -53,10 +55,24 @@ make install
 
 That builds the app and puts it in **Applications**. A bundle you built was
 never downloaded, so Gatekeeper has nothing to quarantine and there is no
-"Open Anyway" step.
+"Open Anyway" step. Building needs only the Command Line Tools
+(`xcode-select --install`).
 
-Building needs the Command Line Tools (`xcode-select --install`). Xcode is not
-required.
+### With the app's own vision model
+
+```bash
+make app-mlx
+```
+
+This builds Læsesalen with [MLX](https://github.com/ml-explore/mlx-swift)
+inside it, so the app runs its own vision-language model on the Mac's GPU
+rather than relying on Apple Intelligence being available. It is the better
+configuration and it costs more to build: MLX compiles Metal kernels, and the
+`metal` compiler comes with **Xcode**, not the Command Line Tools. If Xcode is
+installed but Metal is not, macOS will tell you to run
+`xcodebuild -downloadComponent MetalToolchain`.
+
+The model itself is fetched later, from inside the app, when you ask for it.
 
 ## Use
 
@@ -85,8 +101,9 @@ Nothing, on a Mac with Apple Intelligence available. The engines it looks for:
 | Role | Engine | Needs |
 | --- | --- | --- |
 | Reads the page | Apple Vision | Nothing. Part of macOS. |
+| Reads it again | Læsesalen's own vision model | A build with `make app-mlx`, then one download from inside the app |
 | Reads it again | Apple's on-device model | Apple Intelligence on, macOS 27 for images |
-| Settles disagreements, reviews, asks | Apple's on-device model | Apple Intelligence on |
+| Settles disagreements, reviews, asks | Either of the above | — |
 | Translates | Apple Translation | A one-time Chinese download, offered in the app |
 | *(optional)* Anything above | A model server you run | Off by default; loopback only |
 
@@ -95,9 +112,15 @@ would fix each one. With only Vision and Apple Translation it still reads,
 translates, and runs every mechanical check — it just has no second reader and
 no reviewer, and the confidence scores say exactly that.
 
-The optional model server is for two cases the built-in models do not cover: a
-Mac where Apple Intelligence is unavailable, and a document a small model reads
-badly. It speaks Ollama's API or an OpenAI-compatible one, and the address it
+Læsesalen's own model is a 4-bit Qwen2.5-VL, about 2.3 GB, fetched once from
+Hugging Face and run on this Mac from then on. Your document is not part of
+that download and never leaves the machine; the app keeps the receipts and
+shows them under the lock in the corner. It can be removed again from the same
+panel.
+
+The optional model server is for the case neither of those covers: a document
+a 3-billion-parameter model reads badly, where you already run something
+larger. It speaks Ollama's API or an OpenAI-compatible one, and the address it
 will accept can only be this machine.
 
 ## Checking it yourself
@@ -106,10 +129,13 @@ will accept can only be this machine.
 make test
 ```
 
-Runs the structural privacy check and 181 assertions — the layout logic, the
+Runs the structural privacy check and 184 assertions — the layout logic, the
 reconciler, the agents end to end against fixtures, the integrity checks, and
 Apple Vision actually reading a page of rendered Chinese. No models, no server,
 and no network: a fresh clone runs this.
+
+To check the app's own model as well — which downloads it and reads a page with
+it — `swift run --traits MLXEngine Checks --local-model`.
 
 ---
 

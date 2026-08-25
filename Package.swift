@@ -39,6 +39,11 @@ let package = Package(
             targets: ["DocAppleModels"]
         ),
         .library(
+            name: "DocMLX",
+            type: .static,
+            targets: ["DocMLX"]
+        ),
+        .library(
             name: "DocModelAPI",
             type: .static,
             targets: ["DocModelAPI"]
@@ -54,6 +59,30 @@ let package = Package(
             name: "LaesesalenKit",
             type: .static,
             targets: ["LaesesalenKit"]
+        )
+    ],
+    // The one external dependency, and the reason for it: MLX is Apple's
+    // framework for running models on this machine's own GPU, and
+    // mlx-swift-examples is the library that loads and runs published
+    // vision-language models with it. It is what lets the app carry its own
+    // reader rather than requiring Apple Intelligence to be available or a
+    // server to be running.
+    traits: [
+        Trait(
+            name: "MLXEngine",
+            description: "Run a vision-language model in this process with MLX."
+        )
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-examples",
+            exact: "2.29.1"
+        ),
+        // Depended on directly for `HubApi`, which is how the download
+        // location is moved out of the reader's Documents folder.
+        .package(
+            url: "https://github.com/huggingface/swift-transformers",
+            exact: "1.0.0"
         )
     ],
     targets: [
@@ -81,6 +110,37 @@ let package = Package(
             name: "DocAppleModels",
             dependencies: ["DocCore"],
             path: "Sources/DocAppleModels"
+        ),
+        // The app's own vision-language model, running in this process on
+        // this machine's GPU. No Apple Intelligence, no server, no account:
+        // the weights are fetched once from Hugging Face and everything after
+        // that is local. This is the default second reader.
+        .target(
+            name: "DocMLX",
+            dependencies: [
+                "DocCore",
+                .product(
+                    name: "MLXVLM",
+                    package: "mlx-swift-examples",
+                    condition: .when(traits: ["MLXEngine"])
+                ),
+                .product(
+                    name: "MLXLLM",
+                    package: "mlx-swift-examples",
+                    condition: .when(traits: ["MLXEngine"])
+                ),
+                .product(
+                    name: "MLXLMCommon",
+                    package: "mlx-swift-examples",
+                    condition: .when(traits: ["MLXEngine"])
+                ),
+                .product(
+                    name: "Hub",
+                    package: "swift-transformers",
+                    condition: .when(traits: ["MLXEngine"])
+                )
+            ],
+            path: "Sources/DocMLX"
         ),
         // The optional backup: a model server the user runs themselves, on
         // this machine. Reaches the network only through DocPrivacy, which
@@ -123,6 +183,7 @@ let package = Package(
                 "DocIngest",
                 "DocOCR",
                 "DocAppleModels",
+                "DocMLX",
                 "DocModelAPI",
                 "DocAgents",
                 "DocRender",
@@ -151,7 +212,8 @@ let package = Package(
                 "DocOCR",
                 "DocAgents",
                 "DocRender",
-                "LanguageChinese"
+                "LanguageChinese",
+                .target(name: "DocMLX", condition: .when(traits: ["MLXEngine"]))
             ],
             path: "Tests/Checks"
         )

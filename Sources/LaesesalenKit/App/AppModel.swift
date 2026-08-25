@@ -57,6 +57,9 @@ public final class AppModel: ObservableObject {
     /// the pipeline is parked.
     @Published public private(set) var questions: [ClarificationQuestion] = []
     @Published public private(set) var translationNeedsDownload = false
+    /// The app's own vision-language model, and how far along it is.
+    @Published public private(set) var localModel = LocalModelStatus.notBuiltIn
+    @Published public private(set) var localModelProblem: String?
     @Published public private(set) var openDocument: DocumentSource?
 
     /// What the reader has asked for on this document.
@@ -84,6 +87,10 @@ public final class AppModel: ObservableObject {
     }
 
     public func refreshEngines() async {
+        directory.onLocalModelState = { [weak self] status in
+            self?.localModel = status
+        }
+        localModel = await directory.localModelStatus(preferences)
         statuses = await directory.statuses(
             languages: languages,
             preferences: preferences
@@ -108,6 +115,38 @@ public final class AppModel: ObservableObject {
 
     public var blockedEngines: [EngineStatus] {
         statuses.filter { !$0.state.isReady }
+    }
+
+    // MARK: - The app's own model
+
+    /// Fetch the weights and load them.
+    ///
+    /// The one moment this app talks to the internet, and it happens because
+    /// somebody pressed a button. Nothing of any document is in the request:
+    /// it asks a public host for a file by name.
+    public func fetchLocalModel() {
+        localModelProblem = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.directory.prepareLocalModel(self.preferences)
+            } catch {
+                self.localModelProblem = error.localizedDescription
+            }
+            await self.refreshEngines()
+        }
+    }
+
+    public func removeLocalModel() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.directory.removeLocalModel(self.preferences)
+            } catch {
+                self.localModelProblem = error.localizedDescription
+            }
+            await self.refreshEngines()
+        }
     }
 
     // MARK: - Running a document
@@ -177,6 +216,10 @@ public final class AppModel: ObservableObject {
         translated = []
         progress = JobProgress()
         openDocument = nil
+        // And so is the model: a few gigabytes of resident weights that
+        // nobody is using is a reason to quit an app rather than leave it
+        // open.
+        Task { [weak self] in await self?.directory.unloadLocalModel() }
         // The document itself is let go the moment the reader is done with
         // it. Nothing is cached, nothing is written to disk, and there is no
         // recents list to leak what someone translated.

@@ -5,13 +5,19 @@ that handles private documents makes some version of that claim, and a reader
 has no way to check any of them from the outside. So this one is built to be
 checkable three ways.
 
-## 1. The default path cannot make a request
+## 1. Translating cannot make a request
 
-The app's default engines are the models that ship with macOS: Apple Vision
-reads the page, Apple's on-device model reads it again and settles the
-disagreements, and the Translation framework translates. None of them is a
+Every engine that touches a document runs in this process or in macOS: Apple
+Vision reads the page, Læsesalen's own vision-language model reads it again on
+the Mac's GPU, and either that model or Apple's translates. None of them is a
 network service. With the optional model server off — which is how the app
-ships — no code in the running app opens a socket at all.
+ships — translating a document opens no socket at all.
+
+There is exactly one thing in the app that does reach the internet, and it is
+not translation: **fetching a model's weights**, once, because you pressed a
+button. That request asks a public host for a file by name. No part of any
+document is in it, and it is written down in the ledger under its own heading
+so it can never be confused with document traffic.
 
 `SystemLanguageModel` is the on-device model. The Foundation Models framework
 also offers `PrivateCloudComputeLanguageModel`, which sends the prompt to
@@ -37,7 +43,9 @@ at my server" cannot become "point it at a server":
   body of the request is your document.
 - **No other target links a networking API.** `Scripts/check-privacy.sh` fails
   if one appears, so sending a page somewhere else would take a deliberate edit
-  to `Package.swift` first.
+  to `Package.swift` first. That includes `DocMLX`, which runs the app's own
+  model: it may fetch weights through the Hub client and may not open a
+  connection of its own.
 
 ## 3. The app keeps the receipts
 
@@ -63,9 +71,17 @@ request either. That is checked too.
 
 Worth being plain about:
 
-- **Downloading a model is a download.** If macOS has not yet downloaded the
-  Chinese translation model, the app offers to ask macOS to fetch it. That is a
-  request to Apple for a model. Your document is not involved and is not sent.
+- **Downloading a model is a download.** Læsesalen's own vision model comes
+  from Hugging Face and macOS's translation model comes from Apple. Both are
+  fetched once, on request, and neither carries any part of a document. The
+  ledger records them as model downloads rather than as document traffic,
+  which is the honest description and also the one that would make a real leak
+  visible rather than lost in the noise.
+- **The weights download is made by a library, not by this app.** MLX fetches
+  them through Hugging Face's own Swift client. That client is where the
+  request is actually made, so for that one line the ledger is repeating what
+  the library reported rather than proving it — the app can prove where its
+  own requests went, and it says so.
 - **The optional model server is only as private as the server.** The app can
   only reach `127.0.0.1`, but what a program on your machine does with what it
   receives is that program's business. If you point Læsesalen at something on

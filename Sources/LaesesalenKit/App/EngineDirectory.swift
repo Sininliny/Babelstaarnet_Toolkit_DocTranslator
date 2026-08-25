@@ -5,6 +5,9 @@ import DocModelAPI
 import DocOCR
 import DocPrivacy
 import Foundation
+#if MLXEngine
+import DocMLX
+#endif
 
 /// What is available to do the work, and what it would take to have more.
 ///
@@ -22,9 +25,96 @@ import Foundation
 public final class EngineDirectory {
     private let ledger: PrivacyLedger
     private let translationEngine = AppleTranslationEngine()
+    /// Called whenever the app's own model changes state, so the window can
+    /// show a download getting on with itself.
+    public var onLocalModelState: (@MainActor (LocalModelStatus) -> Void)?
+
+    #if MLXEngine
+    private var store: MLXModelStore?
+    #endif
 
     public init(ledger: PrivacyLedger) {
         self.ledger = ledger
+    }
+
+    // MARK: - The app's own model
+
+    /// Built on first use rather than at launch, because building it looks at
+    /// the disk and an app should not do that before anyone has asked it for
+    /// anything.
+    #if MLXEngine
+    private func modelStore(_ preferences: Preferences) -> MLXModelStore {
+        if let store { return store }
+        let model = MLXModelCatalogue.model(id: preferences.localModelID)
+        let ledger = self.ledger
+        let report = self.onLocalModelState
+        let fresh = MLXModelStore(
+            model: model,
+            onEvent: { state in
+                Task { @MainActor in
+                    report?(LocalModelStatus(state, model: model))
+                }
+            },
+            onFetch: { fetch in
+                // Only the completed download is written down. Progress
+                // arrives hundreds of times and a ledger nobody can scroll
+                // is not evidence of anything.
+                guard fetch.finished else { return }
+                Task { @MainActor in
+                    ledger.recordModelDownload(
+                        host: fetch.host,
+                        model: fetch.model,
+                        bytesReceived: 0
+                    )
+                }
+            }
+        )
+        store = fresh
+        return fresh
+    }
+    #endif
+
+    public func localModelStatus(
+        _ preferences: Preferences
+    ) async -> LocalModelStatus {
+        #if MLXEngine
+        let store = modelStore(preferences)
+        let model = await store.model
+        return LocalModelStatus(await store.currentState(), model: model)
+        #else
+        return .notBuiltIn
+        #endif
+    }
+
+    /// Fetch the weights and load them. Returns when the model is ready to
+    /// read a page, or throws with something the reader can act on.
+    public func prepareLocalModel(_ preferences: Preferences) async throws {
+        #if MLXEngine
+        _ = try await modelStore(preferences).prepare()
+        #else
+        throw LocalModelUnavailable.notBuiltIn
+        #endif
+    }
+
+    public func removeLocalModel(_ preferences: Preferences) async throws {
+        #if MLXEngine
+        try await modelStore(preferences).removeFromDisk()
+        #endif
+    }
+
+    /// Give the memory back between documents.
+    public func unloadLocalModel() async {
+        #if MLXEngine
+        await store?.unload()
+        #endif
+    }
+
+    public enum LocalModelUnavailable: LocalizedError {
+        case notBuiltIn
+
+        public var errorDescription: String? {
+            LocalModelStatus.notBuiltIn.explanation
+        }
     }
 
     /// Every engine the app could use, ready or not, with the reason and the
@@ -57,6 +147,18 @@ public final class EngineDirectory {
                 )
             )
         }
+
+        #if MLXEngine
+        let local = modelStore(preferences)
+        let localModel = await local.model
+        let localAgent = MLXTextAgent(store: local, name: localModel.displayName)
+        if preferences.useLocalModel {
+            statuses.append(await localAgent.status(for: .pageReader))
+            statuses.append(await localAgent.status(for: .adjudicator))
+            statuses.append(await localAgent.status(for: .translator))
+            statuses.append(await localAgent.status(for: .reviewer))
+        }
+        #endif
 
         let systemAgent = SystemTextAgent()
         statuses.append(await systemAgent.status(for: .adjudicator))
@@ -110,6 +212,25 @@ public final class EngineDirectory {
            systemAgent.supports(languages) {
             textAgent = systemAgent
         }
+
+        // The app's own model, where the reader has fetched it. It leads the
+        // text roles over Apple's system model for one reason: it is a
+        // several-billion-parameter model chosen for Chinese documents, and
+        // it is available whether or not Apple Intelligence is.
+        #if MLXEngine
+        if preferences.useLocalModel {
+            let local = modelStore(preferences)
+            let localModel = await local.model
+            if await local.currentState() != .notFetched {
+                readers.removeAll { $0.reader == .visionLanguageModel }
+                readers.append(MLXVisionReader(store: local))
+                textAgent = MLXTextAgent(
+                    store: local,
+                    name: localModel.displayName
+                )
+            }
+        }
+        #endif
 
         if await translationEngine.status(for: languages).state.isReady {
             machineTranslator = translationEngine

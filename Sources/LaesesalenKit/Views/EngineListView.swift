@@ -49,6 +49,8 @@ struct EngineListView: View {
                     }
 
                     Divider()
+                    localModelSection
+                    Divider()
                     serverSection
                 }
                 .padding(18)
@@ -96,6 +98,67 @@ struct EngineListView: View {
                 }
             }
             Spacer()
+        }
+    }
+
+    /// The app's own model: the one thing here the app can install for
+    /// itself, and the only engine that does not depend on what Apple has
+    /// decided this Mac is eligible for.
+    private var localModelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(
+                "Use Læsesalen's own vision model",
+                isOn: $model.preferences.useLocalModel
+            )
+            .disabled(model.localModel.stage == .notBuiltIn)
+
+            Text(model.localModel.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            switch model.localModel.stage {
+            case .notBuiltIn:
+                EmptyView()
+            case .notFetched:
+                HStack(spacing: 8) {
+                    Button("Get the model") { model.fetchLocalModel() }
+                    Text(
+                        "One download from Hugging Face. Your document is "
+                            + "not part of it and never leaves this Mac."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            case .fetching(let fraction):
+                ProgressView(value: fraction)
+                    .frame(maxWidth: 320)
+            case .loading:
+                ProgressView()
+                    .controlSize(.small)
+            case .ready:
+                HStack(spacing: 8) {
+                    Label("Ready", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(Color.green)
+                    Spacer()
+                    Button("Remove the download") { model.removeLocalModel() }
+                        .font(.caption)
+                }
+            case .failed(let problem):
+                Label(problem, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                Button("Try again") { model.fetchLocalModel() }
+                    .font(.caption)
+            }
+
+            if let problem = model.localModelProblem {
+                Label(problem, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

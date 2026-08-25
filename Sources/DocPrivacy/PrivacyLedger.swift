@@ -3,6 +3,28 @@ import Foundation
 
 /// One connection the app opened, or refused to open.
 public struct PrivacyLedgerEntry: Identifiable, Sendable {
+    /// What the connection was for.
+    ///
+    /// The distinction matters more than it looks. Fetching a model's weights
+    /// is a request to a public host for a file by name, with nothing of the
+    /// reader's in it. Translating is where a document could leak. Collapsing
+    /// the two into "requests made" would let a 2 GB model download read as
+    /// though the app had sent something — or, far worse, let a leak hide
+    /// behind a download.
+    public enum Purpose: String, Sendable, Equatable {
+        /// Made while reading or translating a document.
+        case documentWork
+        /// Fetching model weights. No document is involved.
+        case modelWeights
+
+        public var displayName: String {
+            switch self {
+            case .documentWork: return "Translating"
+            case .modelWeights: return "Model download"
+            }
+        }
+    }
+
     public enum Outcome: Sendable, Equatable {
         case allowed
         case refused(String)
@@ -15,6 +37,7 @@ public struct PrivacyLedgerEntry: Identifiable, Sendable {
 
     public let id = UUID()
     public let at: Date
+    public let purpose: Purpose
     public let authority: String
     public let path: String
     public let outcome: Outcome
@@ -23,6 +46,7 @@ public struct PrivacyLedgerEntry: Identifiable, Sendable {
 
     public init(
         at: Date = Date(),
+        purpose: Purpose = .documentWork,
         authority: String,
         path: String,
         outcome: Outcome,
@@ -30,6 +54,7 @@ public struct PrivacyLedgerEntry: Identifiable, Sendable {
         bytesReceived: Int = 0
     ) {
         self.at = at
+        self.purpose = purpose
         self.authority = authority
         self.path = path
         self.outcome = outcome
@@ -84,6 +109,29 @@ public final class PrivacyLedger: ObservableObject {
         }
     }
 
+    /// A model download, written down like everything else.
+    ///
+    /// Reported by the engine that made it rather than intercepted, because
+    /// the download happens inside a library this project does not own. That
+    /// is worth stating plainly in the interface: the app can prove where its
+    /// own requests went, and for this one it is repeating what the library
+    /// told it.
+    public func recordModelDownload(
+        host: String,
+        model: String,
+        bytesReceived: Int
+    ) {
+        record(
+            PrivacyLedgerEntry(
+                purpose: .modelWeights,
+                authority: host,
+                path: model,
+                outcome: .allowed,
+                bytesReceived: bytesReceived
+            )
+        )
+    }
+
     public func clear() {
         entries.removeAll()
         totalRequests = 0
@@ -92,12 +140,32 @@ public final class PrivacyLedger: ObservableObject {
         addressesContacted.removeAll()
     }
 
-    /// True when nothing but this machine was ever contacted, which is the
-    /// only state the app is designed to be able to reach.
+    /// True when nothing but this machine was ever contacted.
     public var stayedOnThisMac: Bool {
-        addressesContacted.allSatisfy { authority in
-            authority.hasPrefix("127.") || authority.hasPrefix("[::1]")
-        }
+        addressesContacted.allSatisfy(Self.isThisMac)
+    }
+
+    /// The claim that actually matters, and the one the app is built to be
+    /// able to make: no request carrying any part of a document went
+    /// anywhere but this machine. A model download does not weaken it.
+    public var documentsStayedOnThisMac: Bool {
+        entries
+            .filter { $0.purpose == .documentWork }
+            .allSatisfy { entry in
+                entry.outcome.wasRefused || Self.isThisMac(entry.authority)
+            }
+    }
+
+    public var modelDownloads: [PrivacyLedgerEntry] {
+        entries.filter { $0.purpose == .modelWeights }
+    }
+
+    public var documentRequests: [PrivacyLedgerEntry] {
+        entries.filter { $0.purpose == .documentWork }
+    }
+
+    static func isThisMac(_ authority: String) -> Bool {
+        authority.hasPrefix("127.") || authority.hasPrefix("[::1]")
     }
 
     public var refusals: [PrivacyLedgerEntry] {

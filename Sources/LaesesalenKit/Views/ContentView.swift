@@ -115,15 +115,29 @@ struct StatusBar: View {
         return "\(ready) ready, \(blocked) unavailable"
     }
 
-    /// Says what actually happened, not what is promised. With the built-in
-    /// models there is nothing to report, and that is the sentence.
+    /// Says what actually happened, not what is promised.
+    ///
+    /// The wording is careful about a distinction the reader deserves: a
+    /// model download is a request to a public host, and the app must not
+    /// claim "nothing has left this Mac" once one has been made. What it can
+    /// still say — and what the reader is actually asking — is that no
+    /// document did.
     private var privacySummary: String {
-        let requests = model.ledger.totalRequests
-        if requests == 0 { return "Nothing has left this Mac" }
-        let addresses = model.ledger.addressesContacted
-            .sorted()
-            .joined(separator: ", ")
-        return "\(requests) requests, all to \(addresses)"
+        let ledger = model.ledger
+        guard ledger.totalRequests > 0 else {
+            return "Nothing has left this Mac"
+        }
+        guard ledger.documentsStayedOnThisMac else {
+            return "A request went somewhere else — check this"
+        }
+        let documents = ledger.documentRequests.count
+        let downloads = ledger.modelDownloads.count
+        if documents == 0 {
+            return "No document has left this Mac"
+                + (downloads > 0 ? " · \(downloads) model download" : "")
+                + (downloads > 1 ? "s" : "")
+        }
+        return "\(documents) requests, all to this Mac"
     }
 }
 

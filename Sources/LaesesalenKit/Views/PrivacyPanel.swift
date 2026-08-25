@@ -21,7 +21,11 @@ struct PrivacyPanel: View {
                     .font(.headline)
                 Text(headline)
                     .font(.callout)
-                    .foregroundStyle(ledger.stayedOnThisMac ? Color.secondary : Color.red)
+                    .foregroundStyle(
+                        ledger.documentsStayedOnThisMac
+                            ? Color.secondary
+                            : Color.red
+                    )
             }
             .padding(18)
 
@@ -34,8 +38,8 @@ struct PrivacyPanel: View {
                         .foregroundStyle(.secondary)
                     Text("No connections at all.")
                     Text(
-                        "Everything so far has been done by models that came "
-                            + "with macOS."
+                        "Everything so far has been done by models already on "
+                            + "this Mac."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -49,6 +53,10 @@ struct PrivacyPanel: View {
                         Text(entry.at.formatted(date: .omitted, time: .standard))
                     }
                     .width(80)
+                    TableColumn("For") { entry in
+                        Text(entry.purpose.displayName)
+                    }
+                    .width(110)
                     TableColumn("Address", value: \.authority).width(120)
                     TableColumn("Path", value: \.path)
                     TableColumn("Sent") { entry in
@@ -90,12 +98,26 @@ struct PrivacyPanel: View {
         guard ledger.totalRequests > 0 else {
             return "Nothing. No connection has been opened this session."
         }
-        let addresses = ledger.addressesContacted.sorted().joined(
-            separator: ", "
-        )
-        return "\(ledger.totalRequests) requests to \(addresses) — "
-            + "\(bytes(ledger.totalBytesSent)) sent, "
-            + "\(bytes(ledger.totalBytesReceived)) received."
+        guard ledger.documentsStayedOnThisMac else {
+            return "A request carrying document work went to an address that "
+                + "is not this Mac. That should not be possible; the line is "
+                + "below."
+        }
+        let documents = ledger.documentRequests.count
+        let downloads = ledger.modelDownloads.count
+        var sentence = "No document has left this Mac."
+        if documents > 0 {
+            sentence += " \(documents) requests were made while translating, "
+                + "all to "
+                + ledger.addressesContacted.sorted().joined(separator: ", ")
+                + "."
+        }
+        if downloads > 0 {
+            sentence += " \(downloads) model "
+                + (downloads == 1 ? "download" : "downloads")
+                + " fetched \(bytes(ledger.totalBytesReceived)) of weights."
+        }
+        return sentence
     }
 
     private func bytes(_ count: Int) -> String {

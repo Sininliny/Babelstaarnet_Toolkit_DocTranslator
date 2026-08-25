@@ -13,6 +13,12 @@ import Observation
 public struct Preferences: Codable, Equatable, Sendable {
     /// What the reader wants back, remembered between documents.
     public var outputMode: OutputMode.RawValue
+    /// Whether to use the app's own vision-language model, where this build
+    /// has one and the reader has fetched it. On by default: it is the only
+    /// second reader that does not depend on Apple Intelligence being
+    /// available on the machine.
+    public var useLocalModel: Bool
+    public var localModelID: String
     public var askClarifyingQuestions: Bool
     public var translatorPreference: Engines.TranslatorPreference.RawValue
     /// Off by default. The app is complete without it.
@@ -28,6 +34,8 @@ public struct Preferences: Codable, Equatable, Sendable {
 
     public init(
         outputMode: String = OutputMode.sameDocument.rawValue,
+        useLocalModel: Bool = true,
+        localModelID: String = "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
         askClarifyingQuestions: Bool = true,
         translatorPreference: String = Engines.TranslatorPreference
             .followsInstructions.rawValue,
@@ -40,6 +48,8 @@ public struct Preferences: Codable, Equatable, Sendable {
         standingInstructions: [String] = []
     ) {
         self.outputMode = outputMode
+        self.useLocalModel = useLocalModel
+        self.localModelID = localModelID
         self.askClarifyingQuestions = askClarifyingQuestions
         self.translatorPreference = translatorPreference
         self.useLocalServer = useLocalServer

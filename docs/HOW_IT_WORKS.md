@@ -22,8 +22,17 @@ Three readers, in a fixed order of authority:
    drop diacritics while reporting unchanged confidence — a silent corruption
    no routing gate can detect. Speed is not worth a character that changes the
    word.
-3. **A vision-language model** looking at the same page image — Apple's
-   on-device model on macOS 27, or a model on a server you run.
+3. **A vision-language model** looking at the same page image. Three can fill
+   this role, in this order of preference: Læsesalen's own model, running in
+   this process on the Mac's GPU through MLX; Apple's on-device model, where
+   Apple Intelligence is available; or a model on a server you run.
+
+   Carrying its own is what makes the second reader dependable. Apple's model
+   is excellent and free, and whether a given Mac may use it is Apple's
+   decision, not the reader's — a machine can report itself ineligible with no
+   remedy the user can act on. A 4-bit Qwen2.5-VL in the app's own address
+   space is available on any Apple-silicon Mac, and it was trained on exactly
+   the thing this app is pointed at: Chinese document images.
 
 The two recognizing readers matter because their mistakes are of different
 kinds. Vision reads glyph shapes and knows nothing about what the sentence
@@ -172,10 +181,21 @@ boundary.
 
 ```bash
 make build      # the package
-make test       # the privacy check, then 181 assertions
+make test       # the privacy check, then 184 assertions
 make app        # dist/Læsesalen.app
 make install    # build and put it in /Applications
+
+make build-mlx  # the same, with the app's own vision model
+make app-mlx
 ```
+
+The MLX engine is a build-time option rather than a dependency because of what
+building it takes: MLX compiles Metal kernels, and the `metal` compiler ships
+with Xcode rather than with the Command Line Tools. The package declares an
+`MLXEngine` trait, `DocMLX`'s sources are behind `#if MLXEngine`, and the
+default build is the app without it — so a checkout still builds on a machine
+that has only the tools, which is the same reason the interface is written on
+`ObservableObject`.
 
 The checks are an executable target rather than a test target. `swift test`
 cannot run on a machine with only the Command Line Tools: the Swift Testing

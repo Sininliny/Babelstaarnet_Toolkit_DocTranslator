@@ -15,9 +15,18 @@ if CommandLine.arguments.count > 2, CommandLine.arguments[1] == "--sample" {
     exit(0)
 }
 
+// The model checks download weights and need a GPU, so they are asked for
+// rather than included: `swift run --traits MLXEngine Checks --local-model`.
+if CommandLine.arguments.contains("--local-model") {
+    let report = Report()
+    await runLocalModelChecks(report)
+    exit(report.summarize())
+}
+
 let report = Report()
 
 runPrivacyChecks(report)
+runLedgerChecks(report)
 runTextIntegrityChecks(report)
 runLayoutChecks(report)
 runAlignmentChecks(report)
