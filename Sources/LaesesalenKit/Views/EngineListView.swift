@@ -123,7 +123,12 @@ struct EngineListView: View {
             case .notFetched:
                 Picker("", selection: $model.preferences.localModelID) {
                     ForEach(LocalModelChoice.all, id: \.id) { choice in
-                        Text(choice.label).tag(choice.id)
+                        Text(
+                            model.downloadedModels.contains(choice.id)
+                                ? choice.label + " · already here"
+                                : choice.label
+                        )
+                        .tag(choice.id)
                     }
                 }
                 .labelsHidden()

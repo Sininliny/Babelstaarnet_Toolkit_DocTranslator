@@ -60,6 +60,8 @@ public final class AppModel: ObservableObject {
     /// The app's own vision-language model, and how far along it is.
     @Published public private(set) var localModel = LocalModelStatus.notBuiltIn
     @Published public private(set) var localModelProblem: String?
+    /// The models already on this Mac, so the picker can say so.
+    @Published public private(set) var downloadedModels: Set<String> = []
     @Published public private(set) var openDocument: DocumentSource?
 
     /// What the reader has asked for on this document.
@@ -91,6 +93,7 @@ public final class AppModel: ObservableObject {
             self?.localModel = status
         }
         localModel = await directory.localModelStatus(preferences)
+        downloadedModels = directory.downloadedModels()
         statuses = await directory.statuses(
             languages: languages,
             preferences: preferences

@@ -281,6 +281,25 @@ public final class EngineDirectory {
         )
     }
 
+    /// Which of the models on offer are already on this Mac.
+    ///
+    /// The interface needs this because the choice is otherwise invisible:
+    /// three models in a picker look interchangeable, and switching to one
+    /// that is not here turns a working app into "the model has not been
+    /// downloaded yet" with no hint that the previous choice still is.
+    public func downloadedModels() -> Set<String> {
+        #if MLXEngine
+        let root = MLXModelStore.defaultRoot
+        return Set(
+            MLXModelCatalogue.all
+                .filter { MLXModelStore.isOnDisk($0, root: root) }
+                .map(\.id)
+        )
+        #else
+        return []
+        #endif
+    }
+
     /// Whether the translation model for this pair is downloaded, which is
     /// the one piece of setup the app can offer to do itself.
     public func translationNeedsDownload(

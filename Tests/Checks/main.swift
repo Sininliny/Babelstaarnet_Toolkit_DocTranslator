@@ -1,4 +1,7 @@
 import Foundation
+#if MLXEngine
+import DocMLX
+#endif
 
 /// Every check, in one binary, run with `swift run Checks`.
 ///
@@ -30,6 +33,16 @@ if CommandLine.arguments.count > 2,
     try await FullRun.run(
         writingTo: URL(fileURLWithPath: CommandLine.arguments[2])
     )
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--model-state") {
+    let store = MLXModelStore()
+    let model = await store.model
+    print("root:      \(MLXModelStore.defaultRoot.path)")
+    print("model:     \(model.id)")
+    print("on disk:   \(MLXModelStore.isOnDisk(model, root: MLXModelStore.defaultRoot))")
+    print("state:     \(await store.currentState())")
     exit(0)
 }
 
