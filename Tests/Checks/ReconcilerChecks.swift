@@ -195,6 +195,51 @@ func runReconcilerChecks(_ report: Report) async {
         "a block only the model saw is marked as such"
     )
 
+    // A model that repeats itself must not add a block per repetition.
+    let repeated = await Reconciler(
+        language: chinese,
+        adjudicator: ScriptedAgent.always("A")
+    ).reconcile(
+        readings: [
+            reading(.visionOCR, ["合同期限为三年。"]),
+            reading(
+                .visionLanguageModel,
+                [
+                    "合同期限为三年。",
+                    "合同期限为三年。",
+                    "合同期限为三年。"
+                ]
+            )
+        ],
+        pageIndex: 0
+    )
+    report.equal(
+        repeated.count,
+        1,
+        "a looping reader's repeats are not separate blocks"
+    )
+
+    // But a page that really does repeat a line keeps both, because the
+    // recognizer saw both.
+    let printedTwice = await Reconciler(
+        language: chinese,
+        adjudicator: ScriptedAgent.always("A")
+    ).reconcile(
+        readings: [
+            reading(.visionOCR, ["合同期限为三年。", "合同期限为三年。"]),
+            reading(
+                .visionLanguageModel,
+                ["合同期限为三年。", "合同期限为三年。"]
+            )
+        ],
+        pageIndex: 0
+    )
+    report.equal(
+        printedTwice.count,
+        2,
+        "a line the recognizer saw twice is kept twice"
+    )
+
     // A single reader is not a double-check, and the block says so rather
     // than claiming perfect agreement.
     let alone = await Reconciler(language: chinese, adjudicator: nil)

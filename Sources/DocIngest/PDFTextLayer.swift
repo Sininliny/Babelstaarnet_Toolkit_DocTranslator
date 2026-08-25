@@ -25,7 +25,8 @@ public enum PDFTextLayer {
 
     public static func reading(
         from page: PDFPage,
-        pageIndex: Int
+        pageIndex: Int,
+        language: SourceLanguage
     ) -> PageReading? {
         let count = page.numberOfCharacters
         guard count >= minimumCharacters else { return nil }
@@ -92,7 +93,7 @@ public enum PDFTextLayer {
             blocks: BlockAssembly.blocks(
                 from: lines,
                 pageIndex: pageIndex,
-                language: layoutOnly
+                language: language
             ),
             seconds: 0
         )
@@ -116,21 +117,4 @@ public enum PDFTextLayer {
             height: Double(rect.height / bounds.height)
         )
     }
-
-    /// The assembler takes a language only to decide how to join wrapped
-    /// lines, and the text layer is assembled before anyone has established
-    /// which language the page is in. This stands in: it joins the way a
-    /// script without spaces does, and the pack's own rules are applied to
-    /// the result later.
-    static let layoutOnly = SourceLanguage(
-        identifier: "und",
-        englishName: "Unknown",
-        endonym: "Unknown",
-        visionRecognitionLanguages: [],
-        scriptCharacters: CharacterSet(),
-        isSpaceSeparated: false,
-        sentenceRules: SentenceBoundaryRules(stops: []),
-        expansionRatio: 0.1...10,
-        promptName: "unknown"
-    )
 }

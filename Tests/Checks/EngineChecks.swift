@@ -99,7 +99,7 @@ func runEngineChecks(_ report: Report) async {
     )
 
     // The text layer: not a recognition, and free.
-    let layer = provider.textLayer(at: 0)
+    let layer = provider.textLayer(at: 0, language: chinese)
     report.expect(layer != nil, "a born-digital PDF carries its own text")
     if let layer {
         report.equal(layer.reader, .pdfTextLayer, "and is marked as such")
@@ -137,7 +137,7 @@ func runEngineChecks(_ report: Report) async {
             "a PNG opens as an image"
         )
         report.expect(
-            imageProvider?.textLayer(at: 0) == nil,
+            imageProvider?.textLayer(at: 0, language: chinese) == nil,
             "an image has no text layer"
         )
     }

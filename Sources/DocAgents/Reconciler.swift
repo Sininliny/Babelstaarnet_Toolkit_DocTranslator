@@ -59,7 +59,24 @@ public struct Reconciler: Sendable {
             }
         }
 
-        let pairs = BlockAlignment.align(primary.blocks, secondary.blocks)
+        // A language model that loses the thread transcribes part of the page
+        // twice — twenty-four sentences for a twelve-line notice. The repeats
+        // match nothing in the recognizer's reading, arrive as blocks only
+        // the model saw, and put the same paragraph in the output two and
+        // three times.
+        //
+        // Collapsed before the alignment rather than after it, because after
+        // it the repeat and the original are separate pairs and which one is
+        // "the duplicate" depends on the order the traceback happens to
+        // produce.
+        //
+        // Only the checking reader is collapsed. A page really can print the
+        // same line twice, and the recognizer is the reader whose word for
+        // that is worth taking.
+        let pairs = BlockAlignment.align(
+            primary.blocks,
+            Self.withoutRepeats(secondary.blocks)
+        )
         var reconciled: [ReconciledBlock] = []
         reconciled.reserveCapacity(pairs.count)
 
@@ -75,6 +92,18 @@ public struct Reconciler: Sendable {
             reconciled.append(block)
         }
         return reconciled
+    }
+
+    /// A reading with its own repetitions removed, keeping the first of each.
+    static func withoutRepeats(_ blocks: [SourceBlock]) -> [SourceBlock] {
+        var kept: [SourceBlock] = []
+        for block in blocks {
+            let isRepeat = kept.contains {
+                TextSimilarity.score($0.text, block.text) > 0.9
+            }
+            if !isRepeat { kept.append(block) }
+        }
+        return kept
     }
 
     /// The reading that carries the page's geometry and the most authority.

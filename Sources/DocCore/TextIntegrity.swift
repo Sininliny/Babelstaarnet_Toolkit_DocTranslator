@@ -231,6 +231,14 @@ public enum TextIntegrity {
                 inSource.remove(at: index)
             }
         }
+        // "3日内" translating to "within three days" is a translation, not a
+        // dropped figure. Small numbers are spelled out in ordinary English
+        // prose and it would be wrong to ask a translator not to.
+        for excused in spelledOut(source: inSource, translation: translation) {
+            if let index = inSource.firstIndex(of: excused) {
+                inSource.remove(at: index)
+            }
+        }
 
         for number in inSource {
             if let index = inTranslation.firstIndex(of: number) {
@@ -274,6 +282,35 @@ public enum TextIntegrity {
             )
         }
         return findings
+    }
+
+    /// The numbers English writes as words. Stops at twelve because past it
+    /// figures are the norm, and because a document's larger numbers are the
+    /// ones worth being strict about.
+    static let numberWords = [
+        "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
+        "6": "six", "7": "seven", "8": "eight", "9": "nine", "10": "ten",
+        "11": "eleven", "12": "twelve"
+    ]
+    static let ordinalWords = [
+        "1": "first", "2": "second", "3": "third", "4": "fourth",
+        "5": "fifth", "6": "sixth", "7": "seventh", "8": "eighth",
+        "9": "ninth", "10": "tenth", "11": "eleventh", "12": "twelfth"
+    ]
+
+    /// Which of the missing figures the translation wrote out in words.
+    static func spelledOut(
+        source: [String],
+        translation: String
+    ) -> [String] {
+        let lowered = translation.lowercased()
+        return source.filter { number in
+            guard let word = numberWords[number] else { return false }
+            if lowered.contains(word) { return true }
+            if let ordinal = ordinalWords[number],
+               lowered.contains(ordinal) { return true }
+            return false
+        }
     }
 
     static let monthNames = [

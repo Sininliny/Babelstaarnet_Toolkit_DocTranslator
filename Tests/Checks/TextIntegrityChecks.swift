@@ -62,6 +62,24 @@ func runTextIntegrityChecks(_ report: Report) {
         "full-width and grouped digits are the same number"
     )
 
+    // A small number written out is a translation, not a loss.
+    report.expect(
+        !kinds("限你于收到本通知之日起3日内履行。", "You must comply within three days of receiving this notice.")
+            .contains(.droppedNumber),
+        "“3日” becoming “three days” is not a dropped figure"
+    )
+    report.expect(
+        !kinds("第2条规定如下。", "The second clause provides as follows.")
+            .contains(.droppedNumber),
+        "and an ordinal written out is not either"
+    )
+    // But the figures that matter are still held to the digit.
+    report.expect(
+        kinds("罚款为5000元。", "The fine is five thousand yuan.")
+            .contains(.droppedNumber),
+        "a large figure written out is still reported"
+    )
+
     report.expect(
         kinds("请在三日内答复。", "请在三日内答复。").contains(.echoedSource),
         "text handed back untranslated must be caught"

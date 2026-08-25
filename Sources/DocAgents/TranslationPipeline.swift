@@ -199,7 +199,10 @@ public struct TranslationPipeline: Sendable {
     ) async -> [PageReading] {
         var readings: [PageReading] = []
 
-        if let layer = provider.textLayer(at: index) {
+        if let layer = provider.textLayer(
+            at: index,
+            language: languages.source
+        ) {
             readings.append(layer)
             await onEvent(
                 .readerFinished(

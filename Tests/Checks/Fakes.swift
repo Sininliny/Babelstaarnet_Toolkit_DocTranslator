@@ -120,7 +120,10 @@ struct BlankPages: PageProvider {
         )
     }
 
-    func textLayer(at index: Int) -> PageReading? { layers[index] }
+    func textLayer(
+        at index: Int,
+        language: SourceLanguage
+    ) -> PageReading? { layers[index] }
 }
 
 /// A block, briefly.

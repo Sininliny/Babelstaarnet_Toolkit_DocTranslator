@@ -142,11 +142,18 @@ public final class PDFPageProvider: PageProvider, @unchecked Sendable {
         return PageImage(index: index, image: image, pointSize: bounds.size)
     }
 
-    public func textLayer(at index: Int) -> PageReading? {
+    public func textLayer(
+        at index: Int,
+        language: SourceLanguage
+    ) -> PageReading? {
         lock.lock()
         defer { lock.unlock() }
         guard let page = document.page(at: index) else { return nil }
-        return PDFTextLayer.reading(from: page, pageIndex: index)
+        return PDFTextLayer.reading(
+            from: page,
+            pageIndex: index,
+            language: language
+        )
     }
 }
 
@@ -177,5 +184,8 @@ public final class ImagePageProvider: PageProvider, @unchecked Sendable {
         )
     }
 
-    public func textLayer(at index: Int) -> PageReading? { nil }
+    public func textLayer(
+        at index: Int,
+        language: SourceLanguage
+    ) -> PageReading? { nil }
 }
