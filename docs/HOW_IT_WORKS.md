@@ -5,9 +5,28 @@ installing and using the app; [PRIVACY.md](PRIVACY.md) covers the guarantee.
 
 ## The pipeline
 
-A page goes through five stages. Everything is per block — a paragraph, a
-heading, a table row — because a block is the largest unit that can be checked
-against the original by a person holding the page.
+A page goes through five stages, and everything is **per sentence**.
+
+That unit is not an aesthetic choice, and getting it wrong broke the app once
+already. A recognizer and a vision-language model do not divide a page the same
+way: on a court notice with even line spacing, Apple Vision returned two blocks
+— spacing is all it has to go on — while the model returned twenty-four, one
+per printed line. Nothing can usefully compare two readings that disagree by a
+factor of twelve about what a block is. The alignment degenerated, the model's
+blocks matched nothing, they were adopted as text only it had seen, and the app
+translated the reader that invents while the recognizer's reading of the same
+words sat beside them unused at 0.99 similarity — the safety property inverted
+exactly.
+
+Cut both readings at sentence stops and they land on the same units. A sentence
+is also the right unit for everything else: it is what a translator needs to
+see at once, what a confidence score is worth attaching to, and small enough
+that a person checking a flagged block can find it on the page.
+
+Babelstårnet reached the same unit from the other end — it assembles a sentence
+*across* wrapped lines, because bridging a single visual line gave readers
+fragments that began after the subject and stopped before the verb. Its
+`SentenceBoundary` is used here as it stands.
 
 ### 1. Read it, twice
 
@@ -48,13 +67,27 @@ means it can only ever add readings.
 
 ### 2. Settle what it says
 
-The recognizer's blocks have positions on the page. The model's have none — it
-returns a list of paragraphs. So the two are matched by a sequence alignment on
-the text itself, with gaps allowed on both sides and one block on either side
-allowed to match two on the other. Without those merge transitions, a model
-that joined a heading to the paragraph under it would knock every later block
-on the page out of step, and a page that agreed completely would score as a
-page that agreed about nothing.
+Lines become sentences first. A line continues the one above it when three
+things agree: the gap is no wider than a line, the two share a column, and the
+type is the same size. The third is the one that keeps a heading out of the
+paragraph beneath it, where the first two alone would have accepted it. The
+resulting run is then cut at sentence stops, and each sentence keeps the part
+of the page it was printed on — including its share of a line it shares with
+its neighbour, so two sentences on one line do not both erase it in the
+layout-preserving export.
+
+What counts as a stop comes from the language pack. Chinese needed one rule the
+algorithm had never had to state: **full-width stops stand alone.** 。 is
+followed immediately by the next sentence, and a space there would be a
+typesetting error — so the algorithm's requirement of whitespace after a stop,
+which is right for every language it was written for, finds no stops at all on
+a Chinese page. The ASCII period keeps the requirement, because in Chinese text
+it is nearly always a decimal point or part of a URL.
+
+The recognizer's sentences have positions on the page; the model's have none.
+So the two are matched by a sequence alignment on the text itself, with gaps
+allowed on both sides and up to eight blocks on either side allowed to match
+one on the other.
 
 ### What the model actually does, measured
 
