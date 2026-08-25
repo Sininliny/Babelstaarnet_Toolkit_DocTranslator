@@ -121,6 +121,13 @@ struct EngineListView: View {
             case .notBuiltIn:
                 EmptyView()
             case .notFetched:
+                Picker("", selection: $model.preferences.localModelID) {
+                    ForEach(LocalModelChoice.all, id: \.id) { choice in
+                        Text(choice.label).tag(choice.id)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
                 HStack(spacing: 8) {
                     Button("Get the model") { model.fetchLocalModel() }
                     Text(
@@ -244,6 +251,32 @@ struct EngineListView: View {
         case .unavailable: return .secondary
         }
     }
+}
+
+/// The models on offer, in a form a picker can bind to a stored string.
+///
+/// Repeated here rather than read from `DocMLX` because this view is compiled
+/// in builds that do not have that module. The identifiers are the ones the
+/// catalogue uses; a build without the engine shows the list and cannot act
+/// on it, which is the same as every other unavailable engine on this screen.
+struct LocalModelChoice {
+    let id: String
+    let label: String
+
+    static let all = [
+        LocalModelChoice(
+            id: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            label: "Qwen2.5-VL 3B — balanced (2.3 GB)"
+        ),
+        LocalModelChoice(
+            id: "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
+            label: "Qwen3-VL 4B — more accurate (2.9 GB)"
+        ),
+        LocalModelChoice(
+            id: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            label: "Qwen2-VL 2B — smallest (1.4 GB)"
+        )
+    ]
 }
 
 /// The dialects, in a form a picker can bind to a stored string.

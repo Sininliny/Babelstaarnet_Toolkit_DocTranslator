@@ -56,7 +56,13 @@ statement than any sentence in this file.
 
 ## What is written to disk
 
-Nothing but what you save. There is no library, no recents list, no cache, no
+Model weights, if you asked for them, and nothing else but what you save.
+
+Læsesalen's own vision model lives in
+`~/Library/Application Support/Laesesalen/Models` — not in your Documents
+folder, which is where the Hugging Face client puts downloads by default. The
+engines panel has a button to delete it, and deleting that folder by hand does
+the same thing. There is no library, no recents list, no cache, no
 index, and no crash-recovery copy. The document is held for as long as it takes
 to translate it and let go when you start another. Preferences store the shape
 of your workflow — the output mode, whether to ask questions, standing

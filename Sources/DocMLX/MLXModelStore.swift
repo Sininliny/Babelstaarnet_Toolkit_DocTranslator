@@ -34,6 +34,7 @@ public struct MLXFetchReport: Sendable {
     public let model: String
     public let host: String
     public let fraction: Double
+    public let bytesReceived: Int64
     public let finished: Bool
 }
 
@@ -131,6 +132,7 @@ public actor MLXModelStore {
                         model: model.id,
                         host: "huggingface.co",
                         fraction: progress.fractionCompleted,
+                        bytesReceived: progress.completedUnitCount,
                         finished: progress.fractionCompleted >= 1
                     )
                 )
@@ -141,6 +143,7 @@ public actor MLXModelStore {
                         model: model.id,
                         host: "huggingface.co",
                         fraction: 1,
+                        bytesReceived: bytesOnDisk(),
                         finished: true
                     )
                 )

@@ -64,7 +64,7 @@ public final class EngineDirectory {
                     ledger.recordModelDownload(
                         host: fetch.host,
                         model: fetch.model,
-                        bytesReceived: 0
+                        bytesReceived: Int(fetch.bytesReceived)
                     )
                 }
             }
@@ -221,7 +221,12 @@ public final class EngineDirectory {
         if preferences.useLocalModel {
             let local = modelStore(preferences)
             let localModel = await local.model
-            if await local.currentState() != .notFetched {
+            // On disk or already loaded. A model that is still downloading,
+            // or that failed, is not a reader — and quietly waiting for a
+            // 2 GB download in the middle of someone's first page would look
+            // exactly like the app having hung.
+            let state = await local.currentState()
+            if state == .onDisk || state == .ready {
                 readers.removeAll { $0.reader == .visionLanguageModel }
                 readers.append(MLXVisionReader(store: local))
                 textAgent = MLXTextAgent(
