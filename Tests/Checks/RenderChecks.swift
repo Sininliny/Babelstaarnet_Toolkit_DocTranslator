@@ -44,6 +44,15 @@ func runRenderChecks(_ report: Report) {
         (sizes[page.merged.id] ?? 0) <= (labels.first ?? 0) * 2,
         "a block whose box is far taller than its run is not set that large"
     )
+    // And the other way a cell gets set like a title: the classifier reads a
+    // one-word cell measured a little taller than the row above it as a
+    // heading, which on a form is most of the unit column. Set as one it
+    // comes out bold and larger in the middle of a table.
+    report.equal(
+        sizes[page.strayHeading.id],
+        labels.first,
+        "a cell classified as a heading is set as the row it sits in"
+    )
 
     report.begin("render/space")
 
@@ -183,6 +192,9 @@ private struct FormPage: PageProvider {
     var overlapping: TranslatedBlock { leftLabels[5] }
     /// Two rows the reader handed back as one block.
     let merged: TranslatedBlock
+    /// A unit cell the classifier read as a heading, which is what it does
+    /// with a short cell measured slightly taller than its neighbours.
+    var strayHeading: TranslatedBlock { leftUnits[2] }
 
     init() {
         title = placed(
@@ -225,6 +237,7 @@ private struct FormPage: PageProvider {
                 "度",
                 "deg",
                 x: 0.44, y: y, width: 0.06, height: height,
+                kind: row == 2 ? .heading : .tableRow,
                 order: 70 + row
             ))
         }

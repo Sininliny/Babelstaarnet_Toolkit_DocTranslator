@@ -148,6 +148,17 @@ translated page itself down to whether the rule between two columns survived,
 and Apple Vision actually reading a page of rendered Chinese. No models, no
 server, and no network: a fresh clone runs this.
 
+The app will also run on one document without its window, which is how a
+fault about a particular page gets checked again after a change:
+
+```bash
+"/Applications/Læsesalen.app/Contents/MacOS/Laesesalen" --translate page.pdf ./out
+```
+
+That writes all three exports beside each other and prints how many blocks
+came back needing a human. `--engines` prints what every engine reports and
+exits.
+
 Two more, for a build that has the app's own model. Both need the weights, so
 they are commands rather than part of the suite:
 

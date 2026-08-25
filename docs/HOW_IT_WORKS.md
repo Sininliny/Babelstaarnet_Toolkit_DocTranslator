@@ -287,6 +287,15 @@ neither. Text that would not fit even at the minimum size overruns the box
 downward rather than being clipped: a translation that overflows can be read,
 and one that is silently cut cannot.
 
+Two things are never translated, and on a form they are most of the page.
+Page numbers and running heads, as before — and any block with none of the
+source script in it. A results table is mostly figures: `68.4`, `0-450`,
+`mg/L`, `CFU/mL`. Handed to a translator they do not come back unchanged —
+`4` comes back `Four` and `mg/L` comes back `Mg/l` — and because this export
+replaces any block whose English differs from its source, a correct figure
+printed on the original page is painted over with a worse one. The figures are
+the point of a results table.
+
 The size is settled for a *run of type* rather than for a block. Fitted one at
 a time, every block on a page can be individually correct and the page still
 wrong: a heading shrunk to a caption because its English ran long, one row of
@@ -300,7 +309,11 @@ smaller than its run because its English will not fit at that size; it may
 never be larger because it happens to have room. Nothing that is not a heading
 is set much larger than the page's ordinary type however tall its box is,
 because a box far taller than everything around it is not large type — it is
-two rows the reader handed back as one block.
+two rows the reader handed back as one block. A heading, for this purpose, is
+a block with its lines to itself: the classifier reads a one-word cell
+measured slightly taller than the row above it as a heading, which on a form
+is half the unit column, and set as one it comes out bold and larger in the
+middle of a table.
 
 What a block is allowed to use is the box the Chinese filled plus the empty
 paper beside it, stopping at the nearest thing printed on its own lines and at

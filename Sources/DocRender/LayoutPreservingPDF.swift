@@ -154,7 +154,11 @@ public enum LayoutPreservingPDF {
     ) -> [Placement] {
         let drawable = blocks.filter { isDrawable($0, in: box) }
         guard !drawable.isEmpty else { return [] }
-        let sizes = typeSizes(for: drawable, in: box)
+        // Sized against every block on the page, not only the ones being
+        // replaced. A figure left as printed pixels is still a line of type,
+        // and on a form most of them are: leave them out and the run of type
+        // is settled by the labels alone.
+        let sizes = typeSizes(for: blocks, in: box)
 
         return drawable.map { block in
             // Among *all* the blocks, not only the ones being replaced. The
@@ -206,7 +210,7 @@ public enum LayoutPreservingPDF {
 
         let attributed = attributedText(
             english,
-            block: block,
+            heading: isHeading(block, among: neighbours, in: box),
             colour: colours.ink,
             centred: isCentred(block, among: neighbours, in: box),
             within: space.size,
@@ -266,15 +270,17 @@ public enum LayoutPreservingPDF {
         let implied = blocks.reduce(into: [UUID: CGFloat]()) { sizes, block in
             sizes[block.id] = impliedTypeSize(of: block, in: box)
         }
+        let headings = blocks.filter { isHeading($0, among: blocks, in: box) }
+            .map(\.id)
         let body = median(
-            blocks.filter { $0.source.kind != .heading }
+            blocks.filter { !headings.contains($0.id) }
                 .compactMap { implied[$0.id] }
         ) ?? median(Array(implied.values)) ?? minimumTextSize
 
         var sizes: [UUID: CGFloat] = [:]
         for heading in [true, false] {
             let group = blocks.filter {
-                ($0.source.kind == .heading) == heading
+                headings.contains($0.id) == heading
             }
             for run in runs(of: group, sizes: implied) {
                 let size = median(run.compactMap { implied[$0.id] })
@@ -357,7 +363,7 @@ public enum LayoutPreservingPDF {
     /// the block.
     private static func attributedText(
         _ text: String,
-        block: TranslatedBlock,
+        heading: Bool,
         colour: CGColor,
         centred: Bool,
         within size: CGSize,
@@ -372,7 +378,7 @@ public enum LayoutPreservingPDF {
         var pointSize = max(minimumTextSize, min(72, runSize))
         var best = attributed(
             text,
-            block: block,
+            heading: heading,
             size: pointSize,
             colour: colour,
             centred: centred
@@ -390,7 +396,7 @@ public enum LayoutPreservingPDF {
             pointSize = max(minimumTextSize, pointSize - max(0.5, pointSize * 0.08))
             best = attributed(
                 text,
-                block: block,
+                heading: heading,
                 size: pointSize,
                 colour: colour,
                 centred: centred
@@ -401,14 +407,12 @@ public enum LayoutPreservingPDF {
 
     private static func attributed(
         _ text: String,
-        block: TranslatedBlock,
+        heading: Bool,
         size: CGFloat,
         colour: CGColor,
         centred: Bool
     ) -> NSAttributedString {
-        let weight: CTFontSymbolicTraits = block.source.kind == .heading
-            ? .traitBold
-            : []
+        let weight: CTFontSymbolicTraits = heading ? .traitBold : []
         var font = CTFontCreateWithName(
             "HelveticaNeue" as CFString,
             size,
@@ -646,18 +650,50 @@ public enum LayoutPreservingPDF {
     /// then set in the middle of the room it was allowed rather than over the
     /// figure it labels — a whole column of a form quietly sliding away from
     /// the numbers it belongs to.
-    static func isCentred(
+    /// Whether to set this block as a heading — bold, and in a size of its
+    /// own rather than the body's.
+    ///
+    /// A heading has its lines to itself. What a block *is* gets decided from
+    /// the page — its box, how short it is, whether it ends in a stop — and on
+    /// a form that is right often enough to be worth having and wrong in one
+    /// particular way: a one-word cell measured a little taller than the row
+    /// above it is a heading by every one of those signals. Set as one, it
+    /// comes out bold and larger in the middle of a table, which is the same
+    /// page-level nonsense as a run of type in four sizes. Whatever else it
+    /// may be, it is not a heading if the rest of its row is printed beside
+    /// it.
+    static func isHeading(
+        _ block: TranslatedBlock,
+        among neighbours: [TranslatedBlock],
+        in box: CGRect
+    ) -> Bool {
+        block.source.kind == .heading
+            && !sharesLines(block, among: neighbours, in: box)
+    }
+
+    /// Whether anything else on the page is printed on this block's lines.
+    static func sharesLines(
         _ block: TranslatedBlock,
         among neighbours: [TranslatedBlock],
         in box: CGRect
     ) -> Bool {
         let measured = rect(for: block.source.box, in: box)
-        let sharesLines = neighbours.contains { other in
+        return neighbours.contains { other in
             guard other.id != block.id else { return false }
             let rect = rect(for: other.source.box, in: box)
             return rect.minY < measured.maxY && rect.maxY > measured.minY
         }
-        guard !sharesLines else { return false }
+    }
+
+    static func isCentred(
+        _ block: TranslatedBlock,
+        among neighbours: [TranslatedBlock],
+        in box: CGRect
+    ) -> Bool {
+        guard !sharesLines(block, among: neighbours, in: box) else {
+            return false
+        }
+        let measured = rect(for: block.source.box, in: box)
 
         let measure = measure(of: neighbours, in: box)
         let width = measure.right - measure.left
