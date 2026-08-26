@@ -1,11 +1,11 @@
-# How Læsesalen works
+# How Laesesalen works
 
 The pipeline and the design rules behind it. The [README](../README.md) covers
 installing and using the app; [PRIVACY.md](PRIVACY.md) covers the guarantee.
 
 ## The pipeline
 
-A page goes through six stages. Everything is **per sentence**, and every
+A page goes through seven stages. Everything is **per sentence**, and every
 sentence is translated against the whole document.
 
 That unit is not an aesthetic choice, and getting it wrong broke the app once
@@ -24,7 +24,7 @@ is also the right unit for everything else: it is what a translator needs to
 see at once, what a confidence score is worth attaching to, and small enough
 that a person checking a flagged block can find it on the page.
 
-Babelstårnet reached the same unit from the other end — it assembles a sentence
+Babelstaarnet reached the same unit from the other end — it assembles a sentence
 *across* wrapped lines, because bridging a single visual line gave readers
 fragments that began after the subject and stopped before the verb. Its
 `SentenceBoundary` is used here as it stands.
@@ -33,6 +33,14 @@ The unit is the sentence; the context is the document. Those are different
 questions, and a pipeline that answers the first one well and does not ask the
 second produces a document that is correct sentence by sentence and reads like
 several translations stapled together. Stage 3 exists for the second question.
+
+There is a third question underneath both, and it is the one with the sharpest
+edge: some words in a document are not translated at all. They are *recalled*.
+布洛芬 is ibuprofen — not by any operation on the characters, which spell out as
+"buluofen", but because that is what the drug is called. A sentence-at-a-time
+translator that does not know this writes a word that names no medicine, in an
+English sentence that reads perfectly, on a prescription somebody is about to
+act on. Stage 5 exists for that question.
 
 ### 1. Read it, twice
 
@@ -48,16 +56,18 @@ Three readers, in a fixed order of authority:
    no routing gate can detect. Speed is not worth a character that changes the
    word.
 3. **A vision-language model** looking at the same page image. Three can fill
-   this role, in this order of preference: Læsesalen's own model, running in
+   this role, in this order of preference: Laesesalen's own model, running in
    this process on the Mac's GPU through MLX; Apple's on-device model, where
    Apple Intelligence is available; or a model on a server you run.
 
    Carrying its own is what makes the second reader dependable. Apple's model
    is excellent and free, and whether a given Mac may use it is Apple's
    decision, not the reader's — a machine can report itself ineligible with no
-   remedy the user can act on. A 4-bit Qwen2.5-VL in the app's own address
-   space is available on any Apple-silicon Mac, and it was trained on exactly
-   the thing this app is pointed at: Chinese document images.
+   remedy the user can act on. A 4-bit Qwen vision model in the app's own
+   address space is available on any Apple-silicon Mac, and it was trained on
+   exactly the thing this app is pointed at: Chinese document images. How large
+   a one is a question for the machine rather than a constant — see
+   [The app's own models](#the-apps-own-models).
 
 The two recognizing readers matter because their mistakes are of different
 kinds. Vision reads glyph shapes and knows nothing about what the sentence
@@ -154,9 +164,17 @@ Two asymmetries follow from the same reasoning:
 ### 3. Read the document
 
 Before a word of it is translated, one model call establishes what the document
-*is*: what kind of thing it is, what it concerns, how it should sound, and up
-to eight recurring terms with the rendering each will get throughout. That is
-`DocumentProfile`, and every stage afterwards is handed it.
+*is*: what kind of thing it is, what field it belongs to, what it concerns, the
+situation it is part of, how it should sound, and up to eight recurring terms
+with the rendering each will get throughout. That is `DocumentProfile`, and
+every stage afterwards is handed it.
+
+The background — two or three sentences on who the parties are to each other,
+what has already happened, and what the document is meant to bring about — is
+separate from the subject and does different work. The subject names the
+document. The background is what a translator asks a client before starting,
+and it is what makes a bare instruction on page six an instruction *about*
+something.
 
 The terms are the part that earns the call. 甲方 is "Party A" in a contract and
 "the first party" in a news report. 执行 is "enforcement" in a court notice and
@@ -167,6 +185,17 @@ page one — and because every individual choice is correct, nothing downstream
 flags it. Not the second translator, which is translating the same lone
 sentence. Not the reviewing model, which is shown one block. Deciding once, in
 advance, and handing the decision down is the only thing that fixes it.
+
+The field is not a label for the interface. It decides what the things in the
+document are *called*: a drug by its generic name or its brand name, a body by
+its own English name or by a description of it, a statute by the title it is
+published under or by a rendering of its characters. `DocumentField` carries
+those conventions as instructions, and they go down with the rest of the
+profile to every stage that only ever sees one block. A model that answers the
+rest of the form and skips the field has usually said it anyway — "a discharge
+summary" is medicine, "an enforcement notice" is law — so it is inferred rather
+than left blank, because the blank is not a neutral default: it is a document
+translated with no naming conventions at all.
 
 **What it reads is a sample from across the document, not the front of it.**
 Profiling from page one means profiling from a cover sheet, a letterhead, or a
@@ -193,10 +222,94 @@ window *while the work is running*, because a wrong reading of what the
 document is becomes a wrong assumption in every block, and the reader is the
 only participant who can see that it is wrong.
 
-Alongside the profile, each block is also given the sentence before it and the
-English that sentence was translated into — across page breaks, not just within
-a page. The English half is what keeps a recurring term rendered the same way
-twenty sentences apart without anyone having written it down.
+### The page around a block
+
+The profile is what the whole document knows. Underneath it is a smaller
+question with the same shape: how much of the page *immediately* around a block
+does that block need?
+
+Both easy answers are wrong. Give every block everything — the sentence before,
+the sentence after, the heading above — and two things happen, both of them
+expensive. The prompt roughly triples on every block of every page, on a model
+running on somebody's laptop at twenty seconds a page. And a small model handed
+two sentences and asked for one translation will sometimes translate both, or
+carry on from the context instead of translating the block. That failure does
+not look like a failure: it produces fluent English of a sentence that *is* on
+the page, in the wrong place, and every mechanical check downstream passes it.
+Give every block nothing and 该方 becomes "the said party" one line after the
+party was named.
+
+So there is a floor and there is a widening. The floor is the English of the
+line before — short, already in the target language, so it cannot be mistaken
+for something to translate, and it is what keeps a recurring term rendered the
+same way twenty sentences apart without anyone having written it down. Above
+the floor, a block has to ask, and `AdaptiveContext` decides from three
+properties of the block itself:
+
+- **It is too short to carry its own context** — a heading, a cell, a label.
+- **It points at something outside itself** — 该方, 上述, 前款.
+- **It continues something** — it opens with 但是 or 因此, or the block before
+  it did not end at a sentence stop.
+
+What each of those buys is different, and that matters more than the signals
+do. A reference backwards is answered by the sentence *before* it. A heading is
+answered by the section *after* it: 执行 is "enforcement" over a court order and
+"execution" over a build script, and nothing in the heading decides which. An
+item in a list or a cell in a table is answered by the heading *above* it,
+which may be on the previous page — a table that starts on page two has its
+column headings on page two and its last row on page three, and the row is no
+less under them for the page turn. Handing every block all three would cost the
+same as handing it none and be worse than either.
+
+Two details are load-bearing. The heading is carried in **English**, because it
+has already been translated by the time the rows under it are reached, and
+context in the language being written cannot be mistaken for something to
+translate. And the cues are matched as substrings — in a language written
+without spaces there is nothing else to match on — so the language pack also
+lists the words that *contain* a cue and are not one: 应该 means "ought to" and
+contains 该, and without that list the rule fires on every obligation in the
+document, which on a court notice is every sentence. A rule that fires on
+everything is the rule that was not written.
+
+What each block was given is recorded on it and shown in the side-by-side
+export. A block translated on its own and a block translated with its heading
+above it are two different questions asked of the model, and a reader checking
+a doubtful line is entitled to know which one was asked.
+
+**And where the context turns out to have been the problem, the block is
+translated again without it.** Measured, because the effect is not one anybody
+would have predicted. The five blocks of a court notice, put to the 3B five
+times each:
+
+| what the block was shown | came back untranslated |
+| --- | --- |
+| nothing | 0 of 25 |
+| the English of the line before | 5 of 25 |
+| both halves of the line before | 4 of 25 |
+| both halves, differently worded | 4 of 25 |
+
+Every failure was the same block — a numbered item that is mostly figures —
+and it failed with *anything* in front of it, in every wording tried. The
+model does not mistranslate it; it copies it back. Whatever the mechanism,
+context in front of a block that is nearly all digits is enough to tip a small
+model from translating into copying, and the wording of the request has
+nothing to do with it.
+
+The rule this licenses is deliberately narrow. Deciding in advance which
+blocks are "too numeric for context" would be fitting a rule to one
+measurement: the item that failed is 44% digits and the one below it, which
+never failed, is 38%. So nothing is decided in advance. `TextIntegrity`
+already detects this exact failure — it is the check for a paragraph handed
+back untranslated — and detection is the trigger: a block that came back as
+its own source, *and* was given context, is translated once more with nothing
+around it, and the second answer is kept only if it did better. The second
+call is paid only where the first one demonstrably failed. On the fixture page
+that is five untranslated blocks reduced to one, for nine seconds on a
+forty-second run.
+
+`swift run --traits MLXEngine Checks --prompt-probe` re-runs the table above
+against whatever model is configured, which is how to redo the measurement
+rather than trust it after a model change.
 
 ### 4. Ask, if it matters
 
@@ -209,11 +322,74 @@ translator that does not know whether 对方 is the other party to a contract or
 the other side in a dispute will pick one, write a fluent sentence around it,
 and every downstream check will pass.
 
+One of the questions is the app's own rather than a model's: if reading the
+document did not establish what field it belongs to, the reader is asked, first
+and ahead of anything a model thought of. No other answer changes as many
+words, and a model that has just failed to say what field a document is from is
+not the right participant to decide whether that matters. The options say what
+choosing them commits the translator to — "Medicine — drugs by their generic
+name, doses copied exactly" — because "Medicine" and "Law" are labels someone
+could pick between without learning anything about what happens next. The
+answer is taken back into the profile, not merely passed on as guidance, so the
+stage that looks the names up is told the field the reader just named.
+
 The reader is the only participant who knows what the document is. "I'm not
 sure" is always offered and always last, because forcing a guess converts the
 app's uncertainty into the reader's decision, which is worse than not asking.
 
-### 5. Translate
+### 5. Look the names up
+
+Everything else in this pipeline improves a translation. This stage prevents a
+particular kind of nonsense that no amount of improving reaches.
+
+布洛芬 is ibuprofen. Not because the characters say so — they say "bù luò fēn",
+which is how Chinese borrowed the English word to begin with — but because that
+is what the drug is called. A model translating one line of a prescription at a
+time has two ways to answer: recall the name, or spell the characters out. The
+second produces "Buluofen", and every check in this app approves of it. The
+reading was right. The doses match. The length is plausible. The reviewing
+model, shown that block alone, agrees the English says what the Chinese says.
+The only participant who could catch it is the reader — who came here because
+they cannot read the source.
+
+So `NameResolver` asks, in a call whose only job is that question, what the
+things in this document are already called: a medicine's international
+nonproprietary name, a company's registered name, an institution's own name for
+itself, a statute's official title, a standard's designation, a place's usual
+spelling. It runs after the profile, so the lookup happens in a field rather
+than in the abstract, and after the reader has answered, because what they said
+outranks what the app worked out.
+
+Two rules do most of the work:
+
+- **`UNKNOWN` is an answer.** A model that is not certain is told to say so,
+  and the name is then transliterated where the reader can see it and question
+  it. An invented name is the worst output this app can produce: it is fluent,
+  specific, passes every mechanical check, and is the one thing the reader
+  cannot verify.
+- **A name "resolved" to its own Pinyin is dropped.** It has recorded the
+  mistake as though it were the answer, and it would then suppress the
+  mechanical check in every block it appears in — the one case where a wrong
+  entry is worse than no entry.
+
+What comes back goes to the block that contains it, with the *reason* attached:
+a translator told that 布洛芬 is "ibuprofen" because that is the drug's generic
+name has been given a rule it can apply to the next drug on the list, which no
+entry covers. The reviewer is told the same thing, because a reviewer that has
+not been told what the drug is called will read "Buluofen", find it consistent
+with a source it can see says 布洛芬, and approve it.
+
+The app ships no dictionary — no drug list, no company register, no table of
+statutes. It could not carry one that stayed current and it would still miss
+the document in front of it. What it does instead is ask the question
+separately, in a field, of a model that has been told to admit ignorance.
+
+The names it settled are shown in the window while the run goes, and printed in
+full in the export's provenance. A name is the one decision in this pipeline
+that a reader can check without reading a word of the source: they know what
+they are taking.
+
+### 6. Translate
 
 Two kinds of translator, and they are not interchangeable:
 
@@ -229,7 +405,7 @@ instruction-following translator in the lead, whatever the speed preference
 says — otherwise choosing "fastest" would silently discard everything the
 reader asked for.
 
-### 6. Check it
+### 7. Check it
 
 Three independent checks, and the third is the one that earns its place:
 
@@ -242,8 +418,9 @@ Three independent checks, and the third is the one that earns its place:
   and it will approve a fluent paragraph whose figures changed. Dropped or
   invented numbers, source script left untranslated, text handed back
   unchanged, repetition loops, a model answering about the task instead of
-  doing it, any pinned term the translation ignored, and any rendering that
-  disagrees with what the document settled on in stage 3.
+  doing it, any pinned term the translation ignored, any rendering that
+  disagrees with what the document settled on in stage 3, and any name that
+  came back spelled out in Pinyin.
 
 That last one is the check with no model equivalent anywhere in the pipeline. A
 block that renames a party is fluent, faithful to its own sentence, and wrong
@@ -254,6 +431,18 @@ pinned term is the reader's instruction and the profile is the app's own
 reading, so it is entitled to be flagged and not to be obeyed. Where the reader
 has pinned the same term, the reader wins and the app says nothing.
 
+The Pinyin check is the mechanical half of stage 5, and it works without any
+model having recalled anything: the app spells the source out itself, one
+syllable per character, and looks for the result in the English as a whole
+word. If the English contains a word that is exactly what the Chinese sounds
+like, the translator transliterated where it should have looked up. Three
+characters at least, and matched as a whole word, is what keeps it quiet — a
+private person's name is transliterated and should be, and "Wang Xiaoming" is
+written in parts, so no window of three characters spells out as one word
+there. It is raised as a caution, because some names really are their own
+romanization: 阿里巴巴 is "Alibaba". Where the document or the reader has
+already settled that name, nothing is reported at all.
+
 A blocking mechanical finding caps the confidence below the top band and cannot
 be outvoted, because everything else going right is exactly the condition under
 which a dropped figure goes unnoticed.
@@ -262,6 +451,64 @@ One rule in the number check is worth naming: a month is a digit in Chinese and
 a word in English. 3月 becomes "March", so a month position whose name appears
 in the English is not a dropped figure. Without that, every dated document
 would be flagged.
+
+## The app's own models
+
+The second reader and the text roles can both be filled by models the app
+fetches and runs on this machine's GPU. Three things about that are decisions
+rather than defaults.
+
+**How large a model is a question for the machine.** `MachineCapability` asks
+this Mac what it is — Apple silicon or not, how much unified memory, how much
+free disk — and `LocalModelCatalogue` offers the largest model whose *working
+set* fits in three quarters of that memory. Three quarters because macOS caps
+what a process may wire for the GPU at around that share, and because the
+window, the page images and everything else the reader has open live in the
+rest. Working set rather than download size because weights are the floor: on
+top of them sit the key-value cache, the activations, and a page image expanded
+into several thousand tokens, which is the largest single request this app
+makes of a model.
+
+The consequence is a range instead of a default: a 2B on an eight-gigabyte
+laptop, a 3B or 4B on twelve, a 7B on sixteen, the 32B on sixty-four. A single
+default is wrong in both directions, and the two wrongs are not symmetrical.
+Too small wastes a machine. Too large does not run slowly — it swaps, and a
+page that should take twenty seconds takes four minutes, which does not look
+like a bad recommendation but like a broken app. So the arithmetic is
+deliberately generous, and the reader can override it.
+
+**A second model is the exception.** One model does the reading *and* the text
+work by default, because a vision-language model is a language model with an
+image encoder bolted on: the text roles cost nothing extra, where a second
+model is a second download, a second few gigabytes resident, and two models
+swapping in and out of memory on every block. That trade only turns over on a
+Mac that can hold both at once — and there it is worth taking, because a
+dedicated text model translates and reviews appreciably better than a vision
+model of the same size. So the app offers one exactly where both fit, and
+nowhere else.
+
+A text model brings one hazard a vision model does not: several of the good
+ones reason before they answer. That is wrong for this app twice over. The
+reasoning is *output*, so left in it is what gets drawn onto the page in place
+of the translation; and a model that reasons for two hundred tokens before each
+of several hundred blocks has multiplied the length of the run. So the
+catalogue records the switch each model's own chat template accepts for turning
+it off, the agent puts that switch in the instructions rather than the prompt —
+where it could end up in the text being translated — and
+`AgentPrompts.stripReasoning` removes the block from the answer whatever the
+template did with the request. The token budget is raised to match, because a
+one-word answer with an eight-token budget and a model that reasons first is a
+model that never answers, and an adjudicator that silently stops adjudicating.
+
+**Everything installed can be uninstalled.** `LocalModelStorage` is ordinary
+file handling in `DocCore` rather than in the MLX target, and that placement is
+the point: the default build has no MLX in it, and it must still be able to
+list what an earlier build downloaded and give the disk space back. It finds
+two kinds of dead weight — a model the reader tried and moved on from, and one
+this version of the app no longer offers at all, which is the kind no other
+screen would ever mention again. An identifier is validated as exactly two path
+components before it is turned into a path, because that path is the argument
+to a deletion and the identifier came out of a preferences file.
 
 ## Confidence
 
@@ -336,14 +583,22 @@ and every finding.
 
 No capability module names a language. Simplified Chinese is a value —
 `SourceLanguage` — handed in at the composition root, and it carries the script
-ranges, the sentence terminators, the expansion ratio, and the reading
-normalization. Adding Japanese is adding a target beside `LanguageChinese`, not
+ranges, the sentence terminators, the expansion ratio, the reading
+normalization, and how the script is spelled out in Latin letters when it is
+spelled out rather than translated. Adding Japanese is adding a target beside `LanguageChinese`, not
 editing the pipeline.
 
 What a pack must not carry is the *order* of the pipeline. Which reader leads
 and what happens when they disagree encode correctness constraints, not tuning
 preferences, so they stay in the pipeline where they cannot be reconfigured per
 language.
+
+The romanization is in the pack for the same reason as everything else in it:
+布洛芬 spells out as "buluofen" in Pinyin whatever anyone would prefer. Above
+the pack, the pipeline knows only that some scripts can be spelled out and that
+spelling one out is not translating it — which is enough for the prompt to name
+the thing the model must not do, and enough for the mechanical check to catch
+it when the model does it anyway.
 
 The normalization is the least obvious and most load-bearing part of the
 Chinese pack. Vision returns Chinese with spaces scattered between glyphs and a
@@ -358,7 +613,7 @@ boundary.
 ```bash
 make build      # the package
 make test       # the privacy check, then the whole suite
-make app        # dist/Læsesalen.app
+make app        # dist/Laesesalen.app
 make install    # build and put it in /Applications
 
 make build-mlx  # the same, with the app's own vision model
@@ -366,8 +621,12 @@ make app-mlx
 ```
 
 `swift run --traits MLXEngine Checks --vlm-probe` re-runs the image-size
-comparison above against whatever model is configured, which is how to redo
-the measurement rather than trust this table after a model change.
+comparison above against whatever model is configured, and `--prompt-probe`
+re-runs the context comparison. Both exist because a prompt and an image size
+are not code and cannot be checked like code: the way they fail is that a
+model quietly does something slightly different, which no assertion in this
+project would notice. Redoing the measurement is the only way to know, and
+after a model change it is the first thing to redo.
 
 The MLX engine is a build-time option rather than a dependency because of what
 building it takes: MLX compiles Metal kernels, and the `metal` compiler ships
@@ -411,3 +670,21 @@ checkout with the tools alone.
   the annex is translated as though it were still the contract. The profile is
   shown in the window while the run is going so this is visible rather than
   silent, and an instruction in the brief overrides it.
+- **The app knows no names of its own.** Every lookup in stage 5 is a model
+  recalling something, and a model that does not know is told to say so rather
+  than guess — so a name nobody recalled is transliterated and flagged, not
+  invented. The flag is a caution rather than a failure because the check
+  cannot tell a name that genuinely is its own romanization from one that
+  should have been looked up.
+- **A block never sees the page after it across a page break.** The sentence
+  after the last block on a page has not been read yet, and reading ahead to
+  give one translator one more line would double what a scan costs. The
+  backward context does cross page breaks; the forward context does not.
+- **The measured numbers in this document were taken with the 3B.** The image
+  size table, the figure-fidelity count and the similarity threshold in the
+  checks are all that model on that fixture. A larger reader should do better
+  and is not claimed to until `--vlm-probe` has been run against it.
+- **How large a model a Mac can hold is estimated, not measured.** The rule is
+  weights plus forty per cent plus three gigabytes, against three quarters of
+  unified memory. It is deliberately generous, so on a machine doing nothing
+  else a larger model than the app offers will often run.

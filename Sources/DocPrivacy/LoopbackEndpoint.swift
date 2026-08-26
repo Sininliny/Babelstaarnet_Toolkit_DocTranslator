@@ -23,7 +23,7 @@ public struct LoopbackEndpoint: Hashable, Sendable, CustomStringConvertible {
             switch self {
             case .notLoopback(let host):
                 return """
-                    \(host) is not this machine. Læsesalen only ever connects \
+                    \(host) is not this machine. Laesesalen only ever connects \
                     to 127.0.0.1.
                     """
             case .malformedAddress(let host):

@@ -33,7 +33,7 @@ public actor AppleTranslationEngine: TranslationEngine {
         case .supported:
             state = .needsSetup(
                 "\(languages.source.englishName) has not been downloaded yet.",
-                remedy: "Læsesalen can fetch it — it is a one-time download "
+                remedy: "Laesesalen can fetch it — it is a one-time download "
                     + "from Apple, and translating still happens on this Mac."
             )
         case .unsupported:

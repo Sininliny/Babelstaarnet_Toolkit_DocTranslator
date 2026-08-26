@@ -69,11 +69,15 @@ public struct MLXTextAgent: TextAgent {
         expecting: AnswerShape
     ) async throws -> String {
         let container = try await store.prepare()
+        let model = await store.model
         let session = ChatSession(
             container,
-            instructions: instructions,
+            instructions: Self.instructions(instructions, for: model),
             generateParameters: GenerateParameters(
-                maxTokens: Self.tokenBudget(for: expecting),
+                maxTokens: Self.tokenBudget(
+                    for: expecting,
+                    reasoning: model.reasonsByDefault
+                ),
                 temperature: Self.temperature(self.temperature, for: expecting)
             ),
             // No image in a text call, so the processing is nominal — but
@@ -85,7 +89,7 @@ public struct MLXTextAgent: TextAgent {
         )
 
         let answer = try await session.respond(to: prompt)
-        let text = AgentPrompts.stripFences(answer)
+        let text = AgentPrompts.stripWrapping(answer)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw AgentFailure.emptyAnswer(engineName)
@@ -108,12 +112,39 @@ public struct MLXTextAgent: TextAgent {
         return base
     }
 
-    static func tokenBudget(for shape: AnswerShape) -> Int {
+    /// A model that reasons before answering is told not to.
+    ///
+    /// The switch is the one its own chat template accepts, and it is put in
+    /// the instructions rather than the prompt so it cannot end up in the
+    /// text being translated. Where the template ignores it,
+    /// `AgentPrompts.stripReasoning` still keeps the reasoning out of the
+    /// answer and the enlarged budget still leaves room to reach one — this
+    /// is the cheap half of a belt and braces, not the only half.
+    static func instructions(
+        _ instructions: String,
+        for model: LocalModelSpec
+    ) -> String {
+        guard let quiet = model.thinkingSwitch else { return instructions }
+        return instructions + "\n" + quiet
+    }
+
+    /// How much room the answer gets.
+    ///
+    /// A one-word answer needs eight tokens — unless the model spends its
+    /// budget reasoning first, in which case eight tokens produce no answer
+    /// at all and the adjudicator silently stops adjudicating. So a model
+    /// that reasons is given room to reason and *then* answer, and the
+    /// reasoning is thrown away afterwards.
+    static func tokenBudget(
+        for shape: AnswerShape,
+        reasoning: Bool = false
+    ) -> Int {
+        let headroom = reasoning ? 512 : 0
         switch shape {
         case .prose(let characters):
-            return max(256, min(4_096, characters))
+            return max(256, min(4_096, characters)) + headroom
         case .choice:
-            return 8
+            return 8 + headroom
         }
     }
 }

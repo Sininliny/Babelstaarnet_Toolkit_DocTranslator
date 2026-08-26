@@ -61,7 +61,7 @@ public enum AgentPrompts {
         let boundary = language.sentenceBoundary
         var blocks: [SourceBlock] = []
 
-        for line in stripFences(response).components(separatedBy: "\n") {
+        for line in stripWrapping(response).components(separatedBy: "\n") {
             let text = language.normalizeReading(line)
             guard !text.isEmpty else { continue }
             let source = text as NSString
@@ -144,6 +144,49 @@ public enum AgentPrompts {
         return lines.joined(separator: "\n")
     }
 
+    /// The reasoning a thinking model emits before its answer.
+    ///
+    /// Qwen3 and everything like it open a `<think>` block by default, reason
+    /// in it at length, and only then answer. Left in, that block becomes the
+    /// translation: a paragraph of the model talking to itself about how to
+    /// render 甲方, drawn onto the page where the English should be. It is
+    /// not a preamble in the sense `stripPreamble` handles — it is longer
+    /// than the answer, it is delimited, and it is the majority of what the
+    /// model returns.
+    ///
+    /// Three shapes, because all three occur. A balanced block anywhere in
+    /// the answer is removed. A closing tag with no opening one — the chat
+    /// template opened the block on the model's behalf — means everything
+    /// before it was reasoning. An opening tag with no closing one means the
+    /// model spent its whole token budget thinking and never answered, so
+    /// what is kept is whatever preceded it, which is usually nothing: an
+    /// empty answer is the truth there, and the caller already knows what to
+    /// do with one.
+    public static func stripReasoning(_ text: String) -> String {
+        var output = text
+        while let open = output.range(of: "<think>"),
+              let close = output.range(
+                  of: "</think>",
+                  range: open.upperBound..<output.endIndex
+              ) {
+            output.replaceSubrange(open.lowerBound..<close.upperBound, with: "")
+        }
+        if let close = output.range(of: "</think>", options: .backwards) {
+            output = String(output[close.upperBound...])
+        }
+        if let open = output.range(of: "<think>") {
+            output = String(output[..<open.lowerBound])
+        }
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Everything a model puts around its answer that is not the answer:
+    /// the reasoning block first, then the code fences. In that order,
+    /// because a fenced answer inside a reasoning block is reasoning.
+    public static func stripWrapping(_ text: String) -> String {
+        stripFences(stripReasoning(text))
+    }
+
     // MARK: - Settling a disagreement
 
     public static let choiceA = "A"
@@ -209,7 +252,9 @@ public enum AgentPrompts {
     // MARK: - Reading the whole document first
 
     public static let kindMarker = "KIND:"
+    public static let fieldMarker = "FIELD:"
     public static let subjectMarker = "SUBJECT:"
+    public static let backgroundMarker = "BACKGROUND:"
     public static let registerMarker = "REGISTER:"
     public static let termMarker = "TERM:"
     public static let noteMarker = "NOTE:"
@@ -240,13 +285,24 @@ public enum AgentPrompts {
         Answer in exactly this form and nothing else:
 
         \(kindMarker) <what kind of document this is, a few words>
+        \(fieldMarker) <the field it belongs to, one of: \
+        \(DocumentField.choices.map(\.promptName).joined(separator: ", "))>
         \(subjectMarker) <what it is about, one line>
+        \(backgroundMarker) <the situation this document is part of, two or \
+        three sentences: who the parties are to each other, what has already \
+        happened, and what this document is meant to bring about>
         \(registerMarker) <how the \(languages.target.promptName) should \
         sound: formal legal, plain official, technical, personal>
         \(termMarker) <a term in \(languages.source.promptName)> | <how it \
         should be rendered every time it appears>
         \(noteMarker) <anything a translator seeing only one sentence of \
         this would get wrong>
+
+        The field is not a label. It decides what the things in this \
+        document are called — whether a substance is named by its generic \
+        name or its brand name, whether a body is named by its own English \
+        name or a description of it — so answer it even when the document \
+        is unremarkable.
 
         Give up to eight TERM lines. Choose the terms that recur and that \
         have more than one defensible translation — parties, defined terms, \
@@ -269,7 +325,7 @@ public enum AgentPrompts {
 
     public static func profile(from answer: String) -> DocumentProfile {
         var profile = DocumentProfile()
-        for line in stripFences(answer).components(separatedBy: "\n") {
+        for line in stripWrapping(answer).components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             func value(_ marker: String) -> String {
                 String(trimmed.dropFirst(marker.count))
@@ -277,6 +333,10 @@ public enum AgentPrompts {
             }
             if trimmed.hasPrefix(kindMarker) {
                 profile.kind = value(kindMarker)
+            } else if trimmed.hasPrefix(fieldMarker) {
+                profile.field = DocumentField(describing: value(fieldMarker))
+            } else if trimmed.hasPrefix(backgroundMarker) {
+                profile.background = value(backgroundMarker)
             } else if trimmed.hasPrefix(subjectMarker) {
                 profile.subject = value(subjectMarker)
             } else if trimmed.hasPrefix(registerMarker) {
@@ -298,7 +358,199 @@ public enum AgentPrompts {
                 profile.terms[source] = target
             }
         }
+        // A model that answered the rest of the form and skipped the field
+        // has usually said it anyway: "a discharge summary" is medicine and
+        // "an enforcement notice" is law. Inferring is worth doing because
+        // the alternative is not a neutral default — it is a document
+        // translated with no naming conventions at all, which is the
+        // behaviour this whole stage exists to replace.
+        if !profile.field.isKnown {
+            profile.field = DocumentField(
+                describing: profile.kind + " " + profile.subject
+            )
+        }
         return profile
+    }
+
+    // MARK: - Looking the names up
+
+    public static let nameMarker = "NAME:"
+    public static let unknownName = "UNKNOWN"
+    public static let noNamesMarker = "NONE"
+
+    /// Asks what the things in this document are already called.
+    ///
+    /// A separate call from the profile, and the separation is not tidiness.
+    /// The profile asks a model to *decide* — which of two defensible
+    /// renderings this document will use for 甲方 — and the right answer is
+    /// whichever one it applies consistently. This asks it to *remember*: 布洛芬
+    /// is ibuprofen, and no amount of consistency makes "Buluofen" right.
+    /// Those are different jobs, they fail in different ways, and the
+    /// instruction that makes one reliable is the instruction that ruins the
+    /// other. A model asked to settle a term should be decisive; a model
+    /// asked to recall a name should say when it does not know.
+    ///
+    /// Which is the rule this prompt spends most of its words on. An invented
+    /// name is the worst output this app can produce: it is fluent, it is
+    /// specific, it passes every mechanical check, and it is the one thing
+    /// the reader cannot verify — they came here because they cannot read the
+    /// source. UNKNOWN costs a transliteration the reader can see and
+    /// question. A guess costs them a drug that does not exist.
+    public static func nameInstructions(
+        languages: LanguagePair,
+        profile: DocumentProfile,
+        brief: TranslationBrief = .none,
+        limit: Int = 20
+    ) -> String {
+        var instructions = """
+            You are preparing a document to be translated from \
+            \(languages.source.promptName) into \
+            \(languages.target.promptName). You are not translating it. \
+            Your job is to find the names in it that already have an \
+            established \(languages.target.promptName) form, and to say what \
+            that form is.
+
+            A name has an established form when \
+            \(languages.target.promptName) already calls the thing \
+            something: a medicine's international nonproprietary name, a \
+            company's registered name, an institution's own name for itself, \
+            a statute's official title, a standard's designation, a place's \
+            usual spelling, the published title of a work. These are looked \
+            up, not translated — nothing in the characters leads to them.
+            """
+
+        // What the document is, because it is what makes the difference
+        // between a useful list and a list of the obvious. The same three
+        // characters are a drug on a prescription and a company on an
+        // invoice, and a model that has been told which is looking for one
+        // kind of answer rather than any.
+        let context = profile.guidanceLines()
+        if !context.isEmpty {
+            instructions += """
+
+
+                What you are reading:
+                \(context.map { "- " + $0 }.joined(separator: "\n"))
+                """
+        }
+        if !brief.isEmpty {
+            instructions += """
+
+
+                The reader has said this about it:
+                \(brief.guidanceLines.map { "- " + $0 }.joined(separator: "\n"))
+                """
+        }
+
+        instructions += """
+
+
+            Answer with one line per name and nothing else:
+
+            \(nameMarker) <the name as printed in the source> | <its \
+            established \(languages.target.promptName) form> | <what makes \
+            that its name, in a few words>
+
+            Four rules, and the first matters more than being thorough:
+
+            - If you are not certain of the established form, write \
+            \(unknownName) in place of it. That answer is useful. An \
+            invented one is not: a name nobody can look up reads exactly \
+            like a real one, and the reader cannot check it — not reading \
+            \(languages.source.promptName) is why they are here.
+            """
+        if let romanization = languages.source.romanization {
+            instructions += """
+
+                - Never offer \(romanization.name) as the established form. \
+                Spelling the characters out is what this list exists to \
+                prevent, and a name spelled out is a name not found: write \
+                \(unknownName) instead.
+                """
+        }
+        instructions += """
+
+            - Do not list a private individual's name. Those have no \
+            established form and are transliterated.
+            - Do not list anything you would translate rather than look up: \
+            an ordinary word, a phrase, a description of something.
+
+            Up to \(limit) names. If the document contains none, answer with \
+            the single word \(noNamesMarker).
+            """
+        return instructions
+    }
+
+    public static func namePrompt(sample: String) -> String {
+        """
+        Here is the document. It is taken from across it and marked with the \
+        page each part came from, so expect gaps between the parts.
+
+        \(sample)
+        """
+    }
+
+    /// The names a model was sure of, and only those.
+    ///
+    /// - Parameter language: the source language, so an answer that spelled a
+    ///   name out instead of recalling it can be dropped. The model is told
+    ///   not to do this; dropping it is what makes the instruction hold. A
+    ///   rendering identical to the source's own romanization has recorded
+    ///   the mistake as though it were the answer, and it would then suppress
+    ///   the mechanical check that would otherwise have caught it in every
+    ///   block — the one case where a wrong entry is worse than no entry.
+    public static func names(
+        from answer: String,
+        language: SourceLanguage,
+        limit: Int = 20
+    ) -> [ResolvedName] {
+        let text = stripWrapping(answer)
+        guard !text.uppercased().hasPrefix(noNamesMarker) else { return [] }
+
+        var names: [ResolvedName] = []
+        var seen = Set<String>()
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix(nameMarker) else { continue }
+            let parts = String(trimmed.dropFirst(nameMarker.count))
+                .components(separatedBy: "|")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count >= 2 else { continue }
+            let source = parts[0]
+            let rendering = parts[1]
+            guard !source.isEmpty, !rendering.isEmpty,
+                  rendering != source,
+                  !rendering.uppercased().contains(unknownName),
+                  !seen.contains(source),
+                  !isRomanization(rendering, of: source, in: language)
+            else { continue }
+            seen.insert(source)
+            let basis = parts.count > 2 && !parts[2].isEmpty
+                ? parts[2]
+                : nil
+            names.append(
+                ResolvedName(
+                    source: source,
+                    rendering: rendering,
+                    basis: basis
+                )
+            )
+            guard names.count < limit else { break }
+        }
+        return names
+    }
+
+    /// Whether a rendering is just the source spelled out.
+    static func isRomanization(
+        _ rendering: String,
+        of source: String,
+        in language: SourceLanguage
+    ) -> Bool {
+        guard let romanization = language.romanization else { return false }
+        let syllables = romanization.syllables(source)
+        guard !syllables.isEmpty else { return false }
+        let letters = rendering.lowercased().filter(\.isLetter)
+        return String(letters) == syllables.joined()
     }
 
     // MARK: - Translating
@@ -324,7 +576,26 @@ public enum AgentPrompts {
             answer is the first word of the translation.
             - Never repeat the \(languages.source.promptName) back.
             - If the text is a heading, translate it as a heading.
+            - A name that \(languages.target.promptName) already has takes \
+            the form \(languages.target.promptName) gives it: a medicine \
+            its generic name, a company its registered name, a body the name \
+            it uses for itself, a law or a published work its own title, a \
+            place its usual spelling. These are recalled, not rendered.
             """
+        // Named, because an instruction that names the mistake is followed
+        // where one that describes it is not. "Do not transliterate" is
+        // advice; "Pinyin is not English" is a rule about a specific thing
+        // the model is about to do.
+        if let romanization = languages.source.romanization {
+            instructions += """
+
+                - \(romanization.name) is not \
+                \(languages.target.promptName). Spell a name out only when \
+                it has no established \(languages.target.promptName) form — \
+                a private person's name, most of all — and never as a way of \
+                getting past one you cannot recall.
+                """
+        }
 
         // What the document is, before what the reader asked for: the
         // profile is the app's own reading and the brief is the reader's
@@ -354,27 +625,74 @@ public enum AgentPrompts {
         return instructions
     }
 
+    /// One block, with as much of the page around it as it turned out to
+    /// need.
+    ///
+    /// The order is deliberate and it is the part that keeps a small model
+    /// honest. Everything that is context comes first and is labelled as
+    /// context; the block to translate comes last, immediately after the
+    /// instruction to translate it, and nothing follows it. A model handed a
+    /// sentence in the middle of a prompt will sometimes translate the whole
+    /// prompt; a model handed one at the end of it rarely does.
+    ///
+    /// What is included is decided by `AdaptiveContext`, not here. See
+    /// `ContextNeed` for why that is a decision at all.
     public static func translationPrompt(
         text: String,
         kind: BlockKind,
         documentContext: String?,
         terms: [GlossaryTerm] = [],
-        following context: TranslationContext = .none
+        following context: TranslationContext = .none,
+        need: ContextNeed = .none
     ) -> String {
         var prompt = ""
-        // The sentence before this one, and what it was translated as. The
-        // English half is what keeps a recurring term rendered the same way
-        // twenty sentences apart, and what lets a pronoun or a "the said
-        // party" resolve to something.
-        if let source = context.previousSource, !source.isEmpty {
-            prompt += "The previous sentence reads:\n"
-                + String(source.suffix(200)) + "\n"
-            if let target = context.previousTarget, !target.isEmpty {
-                prompt += "You translated it as:\n"
-                    + String(target.suffix(200)) + "\n"
-            }
-            prompt += "\nTranslate only what follows.\n\n"
+        var hasContext = false
+
+        if let documentContext, !documentContext.isEmpty {
+            prompt += "This is from a document titled: "
+                + String(documentContext.prefix(120)) + "\n\n"
         }
+        // The heading first, because it is the widest thing here: it says
+        // what the whole section is, and a row of a table means whatever its
+        // column says it means.
+        if need.heading, let heading = context.sectionHeading,
+           !heading.isEmpty {
+            prompt += "It sits under the heading:\n"
+                + String(heading.prefix(120)) + "\n\n"
+            hasContext = true
+        }
+        // The sentence before, as printed. Withheld from a block that stands
+        // on its own: it is the piece a model is most likely to mistake for
+        // the thing it was asked to translate.
+        if need.previousSource, let source = context.previousSource,
+           !source.isEmpty {
+            prompt += "The line before it reads:\n"
+                + String(source.suffix(200)) + "\n"
+            hasContext = true
+        }
+        // And the English it became. The floor, and the cheap half: it is
+        // already in the target language, so it cannot be mistaken for
+        // something to translate, and it is what keeps a recurring term
+        // rendered the same way twenty sentences apart.
+        if need.previousTarget, let target = context.previousTarget,
+           !target.isEmpty {
+            prompt += "The line before it was translated as:\n"
+                + String(target.suffix(200)) + "\n"
+            hasContext = true
+        }
+        // And, for a heading or a fragment, what comes after it. A heading is
+        // named by the section under it: 执行 is "enforcement" over a court
+        // order and "execution" over a build script, and the heading itself
+        // contains nothing that decides which.
+        if need.following, let next = context.nextSource, !next.isEmpty {
+            prompt += "The line after it reads:\n"
+                + String(next.prefix(200)) + "\n"
+            hasContext = true
+        }
+        if hasContext {
+            prompt += "\nThat is context. Do not translate any of it.\n\n"
+        }
+
         // Only the terms that occur in this block. A glossary of two hundred
         // entries repeated in front of every block is mostly noise, and a
         // model that has to find the relevant line will sometimes apply the
@@ -385,14 +703,10 @@ public enum AgentPrompts {
                     .joined(separator: "\n")
                 + "\n\n"
         }
-        if let documentContext, !documentContext.isEmpty {
-            prompt += "This is from a document titled: "
-                + String(documentContext.prefix(120)) + "\n\n"
-        }
         if kind == .heading {
-            prompt += "Translate this heading:\n"
+            prompt += "Translate this heading, and nothing else:\n"
         } else {
-            prompt += "Translate this text:\n"
+            prompt += "Translate this text, and nothing else:\n"
         }
         return prompt + text
     }
@@ -408,6 +722,11 @@ public enum AgentPrompts {
     /// allowed to rewrite — the draft is the app's own output, not the
     /// user's document, so a rewrite cannot invent something the source never
     /// said without the mechanical checks in `TextIntegrity` noticing.
+    /// - Parameter agreedNames: the names in *this* block that were looked
+    ///   up when the document was read. Given for the same reason as the
+    ///   terms and with more at stake: a reviewer that has not been told what
+    ///   the drug is called will read "Buluofen", find it consistent with a
+    ///   source it can see says 布洛芬, and approve it.
     /// - Parameter agreedTerms: the renderings the document settled on that
     ///   occur in *this* block. The reviewer has no glossary of its own — it
     ///   is handed a source and a draft — so if it is not told here that the
@@ -417,7 +736,8 @@ public enum AgentPrompts {
         languages: LanguagePair,
         brief: TranslationBrief = .none,
         profile: DocumentProfile = .unknown,
-        agreedTerms: [String] = []
+        agreedTerms: [String] = [],
+        agreedNames: [String] = []
     ) -> String {
         var instructions = """
         You check translations from \(languages.source.promptName) into \
@@ -431,6 +751,12 @@ public enum AgentPrompts {
         3. Anything in the translation that is not in the source.
         4. Numbers, dates, names, and units that do not match.
         5. \(languages.source.promptName) left untranslated.
+        6. A name spelled out syllable by syllable where \
+        \(languages.target.promptName) has a name of its own for the thing — \
+        a medicine, a company, a body, a law, a place. This one does not \
+        look like a defect: it reads as a word, and it is the only error \
+        here that a reader who cannot read \
+        \(languages.source.promptName) has no way to catch.
 
         Do not rewrite for style. Fluency is not a defect.
 
@@ -441,7 +767,7 @@ public enum AgentPrompts {
         \(revisionMarker) <the corrected translation, and nothing else>
         """
         if !profile.isEmpty {
-            let lines = profile.guidanceLines() + agreedTerms
+            let lines = profile.guidanceLines() + agreedTerms + agreedNames
             instructions += """
 
                 This block is part of a larger document:
@@ -559,7 +885,7 @@ public enum AgentPrompts {
         from answer: String,
         limit: Int = 3
     ) -> [ClarificationQuestion] {
-        let text = stripFences(answer)
+        let text = stripWrapping(answer)
         guard !text.uppercased().hasPrefix(noQuestionsMarker) else { return [] }
 
         var questions: [ClarificationQuestion] = []
@@ -613,7 +939,7 @@ public enum AgentPrompts {
     }
 
     public static func verdict(from answer: String) -> ReviewVerdict {
-        let text = stripFences(answer)
+        let text = stripWrapping(answer)
         let upper = text.uppercased()
 
         guard let range = upper.range(of: revisionMarker) else {

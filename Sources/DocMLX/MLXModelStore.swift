@@ -1,5 +1,6 @@
 #if MLXEngine
 
+import DocCore
 import Foundation
 import Hub
 import MLXLMCommon
@@ -38,8 +39,8 @@ public struct MLXFetchReport: Sendable {
     public let finished: Bool
 }
 
-/// The app's own model: fetched once, then held in memory and run on this
-/// machine's GPU.
+/// One of the app's own models: fetched once, then held in memory and run on
+/// this machine's GPU.
 ///
 /// The weights come from Hugging Face the first time and from the disk every
 /// time after. That download is the only moment this app talks to the
@@ -47,66 +48,69 @@ public struct MLXFetchReport: Sendable {
 /// document is involved in it — the request is for a file by name. Everything
 /// the model is then asked about stays in this process.
 ///
-/// Weights are put in Application Support rather than the Hub library's
-/// default, which is the user's Documents folder. A translator that drops two
-/// gigabytes of tensors into someone's Documents has misunderstood whose
-/// computer it is on.
+/// A store holds one model. The app has one for the page reader and, on a Mac
+/// with room for both, a second for the text work — which is why the model it
+/// holds is a value it is given rather than a constant it knows.
 public actor MLXModelStore {
     public private(set) var state: MLXModelState = .notFetched
-    public private(set) var model: MLXModel
+    public private(set) var model: LocalModelSpec
 
     private var container: ModelContainer?
     private let hub: HubApi
     private let root: URL
-    private let onEvent: @Sendable (MLXModelState) -> Void
+    /// Reports the state *and* which model it belongs to. Both, because a
+    /// store can be told to hold a different model: a callback that closed
+    /// over the model it was built with would announce a 7B download under
+    /// the name of the 3B the reader switched away from.
+    private let onEvent: @Sendable (MLXModelState, LocalModelSpec) -> Void
     private let onFetch: @Sendable (MLXFetchReport) -> Void
 
     public init(
-        model: MLXModel = MLXModelCatalogue.default,
+        model: LocalModelSpec = LocalModelCatalogue.fallback,
         root: URL? = nil,
-        onEvent: @escaping @Sendable (MLXModelState) -> Void = { _ in },
+        onEvent: @escaping @Sendable (MLXModelState, LocalModelSpec) -> Void
+            = { _, _ in },
         onFetch: @escaping @Sendable (MLXFetchReport) -> Void = { _ in }
     ) {
         self.model = model
-        let base = root ?? Self.defaultRoot
+        let base = root ?? LocalModelStorage.defaultRoot
         self.root = base
         self.hub = HubApi(downloadBase: base)
         self.onEvent = onEvent
         self.onFetch = onFetch
-        self.state = Self.isOnDisk(model, root: base) ? .onDisk : .notFetched
+        self.state = LocalModelStorage.isOnDisk(model.id, in: base)
+            ? .onDisk
+            : .notFetched
     }
 
-    public static var defaultRoot: URL {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        return support
-            .appendingPathComponent("Laesesalen", isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
+    /// Where the weights are put: Application Support, rather than the Hub
+    /// library's default, which is the reader's Documents folder.
+    public static var defaultRoot: URL { LocalModelStorage.defaultRoot }
+
+    public static func isOnDisk(_ model: LocalModelSpec, root: URL) -> Bool {
+        LocalModelStorage.isOnDisk(model.id, in: root)
     }
 
-    /// Whether the weights are already here. Checked by looking for the
-    /// repository directory with a weights file in it, because "the folder
-    /// exists" is also true of a download that was interrupted.
-    public static func isOnDisk(_ model: MLXModel, root: URL) -> Bool {
-        let directory = root
-            .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent(model.id, isDirectory: true)
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            atPath: directory.path
-        ) else { return false }
-        return contents.contains { $0.hasSuffix(".safetensors") }
-    }
-
-    public func use(_ model: MLXModel) {
+    public func use(_ model: LocalModelSpec) {
         guard model != self.model else { return }
         container = nil
         self.model = model
-        set(Self.isOnDisk(model, root: root) ? .onDisk : .notFetched)
+        set(
+            LocalModelStorage.isOnDisk(model.id, in: root)
+                ? .onDisk
+                : .notFetched
+        )
     }
 
     public func currentState() -> MLXModelState { state }
+
+    /// Whether this model could do a job right now: on the disk, or already
+    /// in memory. A model that is still downloading is not a reader — quietly
+    /// waiting for a multi-gigabyte download in the middle of someone's first
+    /// page looks exactly like the app having hung.
+    public var isUsable: Bool {
+        state == .onDisk || state == .ready
+    }
 
     /// Fetch if needed, then load. Safe to call repeatedly: the second call
     /// gets the container the first one built.
@@ -114,7 +118,22 @@ public actor MLXModelStore {
     public func prepare() async throws -> ModelContainer {
         if let container, state == .ready { return container }
 
-        let wasOnDisk = Self.isOnDisk(model, root: root)
+        let wasOnDisk = LocalModelStorage.isOnDisk(model.id, in: root)
+        // Checked before the download rather than during it. A fetch that
+        // fills the disk and then fails has left the reader worse off than
+        // when they pressed the button, and the failure it produces names a
+        // temporary file rather than the problem.
+        if !wasOnDisk {
+            let machine = MachineCapability.thisMac(diskAt: root)
+            guard machine.hasRoomOnDisk(for: model.approximateBytes) else {
+                let problem = MLXModelFailure.noRoomOnDisk(
+                    needs: model.approximateSize,
+                    free: machine.freeDiskDescription
+                )
+                set(.failed(problem.localizedDescription))
+                throw problem
+            }
+        }
         set(wasOnDisk ? .loading : .fetching(fraction: 0))
 
         let model = self.model
@@ -122,9 +141,9 @@ public actor MLXModelStore {
         let report = self.reporter()
 
         do {
-            let loaded = try await loadModelContainer(
-                hub: hub,
-                configuration: model.configuration
+            let loaded = try await MLXModelCatalogue.loadContainer(
+                model,
+                hub: hub
             ) { progress in
                 report(progress.fractionCompleted)
                 onFetch(
@@ -148,55 +167,82 @@ public actor MLXModelStore {
                     )
                 )
             }
+            // The reader may have chosen a different model while this was
+            // downloading — `use` is served between the awaits above, and it
+            // is the one thing that can change what this store holds. The
+            // container that has just arrived is the old model's; adopting it
+            // would report the newly chosen model as ready and then read
+            // pages with the one it replaced.
+            guard model == self.model else { return loaded }
             container = loaded
             set(.ready)
             return loaded
         } catch {
+            guard model == self.model else { throw error }
             set(.failed(error.localizedDescription))
             throw error
         }
     }
 
-    /// Give the memory back. A 3B model is a couple of gigabytes of resident
+    /// Give the memory back. A model is several gigabytes of resident
     /// weights, and an app that keeps them after the reader has finished a
     /// document is an app that gets quit rather than left open.
     public func unload() {
         container = nil
-        set(Self.isOnDisk(model, root: root) ? .onDisk : .notFetched)
+        set(
+            LocalModelStorage.isOnDisk(model.id, in: root)
+                ? .onDisk
+                : .notFetched
+        )
     }
 
-    /// Everything fetched, removed. Offered because a model the reader is
-    /// finished with is two gigabytes they may want back, and an app that
-    /// cannot uninstall what it installed is a bad guest.
+    /// Everything this store fetched, removed.
     public func removeFromDisk() throws {
         container = nil
-        let directory = root
-            .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent(model.id, isDirectory: true)
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
-        }
+        try LocalModelStorage.remove(model.id, in: root)
         set(.notFetched)
     }
 
+    /// Remove some other model — one the reader tried and moved on from, or
+    /// one a previous version of the app downloaded and this one no longer
+    /// offers.
+    ///
+    /// Goes through the store rather than around it because the model being
+    /// deleted may be the one this store is holding in memory, and deleting
+    /// the weights out from under a loaded container leaves the app in a
+    /// state where everything works until the next launch.
+    @discardableResult
+    public func remove(id: String) throws -> Int64 {
+        if id == model.id { container = nil }
+        let freed = try LocalModelStorage.remove(id, in: root)
+        if id == model.id { set(.notFetched) }
+        return freed
+    }
+
+    public func installed() -> [InstalledModel] {
+        LocalModelStorage.installed(in: root)
+    }
+
     public func bytesOnDisk() -> Int64 {
-        let directory = root.appendingPathComponent("models", isDirectory: true)
-        guard let walker = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        ) else { return 0 }
-        var total: Int64 = 0
-        for case let url as URL in walker {
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?
-                .fileSize ?? 0
-            total += Int64(size)
+        LocalModelStorage.totalBytes(in: root)
+    }
+
+    public enum MLXModelFailure: LocalizedError, Equatable {
+        case noRoomOnDisk(needs: String, free: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .noRoomOnDisk(let needs, let free):
+                return "This model needs about \(needs) and there is \(free) "
+                    + "free. Remove a model you are not using, or choose a "
+                    + "smaller one."
+            }
         }
-        return total
     }
 
     private func set(_ state: MLXModelState) {
         self.state = state
-        onEvent(state)
+        onEvent(state, model)
     }
 
     /// Progress arrives on whatever thread the Hub is downloading on, so the

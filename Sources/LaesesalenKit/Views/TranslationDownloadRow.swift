@@ -23,19 +23,21 @@ struct TranslationDownloadRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "arrow.down.circle")
+            Image(systemName: "arrow.down.circle.fill")
                 .foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("macOS has not downloaded Simplified Chinese yet")
-                    .font(.callout)
+                    .font(.callout.weight(.medium))
                 Text(
                     "A one-time download from Apple. Translating still "
                         + "happens on this Mac."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: 8)
             Button(state.asked ? "Asking macOS…" : "Get it") {
                 state.asked = true
                 state.configuration = TranslationSession.Configuration(
@@ -49,10 +51,6 @@ struct TranslationDownloadRow: View {
             }
             .disabled(state.asked)
         }
-        .padding(12)
-        .background(Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .frame(maxWidth: 470)
         .translationTask(state.configuration) { session in
             // `prepareTranslation` is what raises the system's own download
             // prompt. It returns when the model is on the machine, or throws

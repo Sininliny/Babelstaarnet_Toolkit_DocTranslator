@@ -90,6 +90,21 @@ public enum HTMLExport {
             }
             output += "<dt>Settled</dt><dd>"
                 + escape(block.source.settlement.summary) + "</dd>"
+            // What the translator was shown besides the block itself. A
+            // block translated on its own and one translated with the
+            // heading above it are two different questions asked of the
+            // model, and a reader checking a doubtful line deserves to know
+            // which was asked.
+            if block.context.retriedAlone {
+                output += "<dt>Translated twice</dt><dd>"
+                    + escape(block.context.reasons.joined(separator: "; "))
+                    + "</dd>"
+            } else if block.context.wasWidened,
+                      !block.context.reasons.isEmpty {
+                output += "<dt>Also given</dt><dd>"
+                    + escape(block.context.reasons.joined(separator: "; "))
+                    + "</dd>"
+            }
             if block.wasRevised {
                 output += "<dt>First draft</dt><dd>"
                     + escape(block.firstDraft) + "</dd>"

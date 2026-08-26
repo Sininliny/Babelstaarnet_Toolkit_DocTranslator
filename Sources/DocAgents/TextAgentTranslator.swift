@@ -51,13 +51,26 @@ public struct TextAgentTranslator: TranslationEngine {
         _ text: String,
         kind: BlockKind,
         languages: LanguagePair,
-        following context: TranslationContext = .none
+        following context: TranslationContext = .none,
+        need: ContextNeed = .none
     ) async throws -> String {
         // The profile's terms are folded in as glossary entries so the
         // translator sees one list rather than two, and the reader's own
         // entries come last so they win where they disagree.
         let agreed = profile.terms(appearingIn: text).map {
             GlossaryTerm(term: $0.0, handling: .render($0.1))
+        }
+        // And the names the document looked up, which arrive with the reason
+        // they are that name attached. The reason is not decoration: a model
+        // told that 布洛芬 is "ibuprofen" *because that is the drug's generic
+        // name* has been given a rule it can apply to the next drug on the
+        // list, which this block's entry says nothing about.
+        let lookedUp = profile.names(appearingIn: text).map {
+            GlossaryTerm(
+                term: $0.source,
+                handling: .render($0.rendering),
+                note: $0.basis
+            )
         }
         let answer = try await agent.answer(
             instructions: AgentPrompts.translationInstructions(
@@ -69,8 +82,9 @@ public struct TextAgentTranslator: TranslationEngine {
                 text: text,
                 kind: kind,
                 documentContext: documentContext,
-                terms: agreed + brief.glossary(applyingTo: text),
-                following: context
+                terms: agreed + lookedUp + brief.glossary(applyingTo: text),
+                following: context,
+                need: need
             ),
             // Room for the expansion the language pack expects, plus the
             // headroom a model needs not to stop mid-sentence.
@@ -81,7 +95,7 @@ public struct TextAgentTranslator: TranslationEngine {
             )
         )
         return AgentPrompts.stripPreamble(
-            AgentPrompts.stripFences(answer)
+            AgentPrompts.stripWrapping(answer)
         )
     }
 }

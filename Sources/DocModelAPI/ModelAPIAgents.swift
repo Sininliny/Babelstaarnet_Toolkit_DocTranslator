@@ -67,8 +67,10 @@ public struct ModelAPITextAgent: TextAgent {
             maximumTokens: Self.tokenBudget(for: expecting)
         )
         // Reasoning models emit their working before the answer, in tags the
-        // server does not always strip. The answer is what comes after.
-        let text = Self.afterThinking(answer)
+        // server does not always strip. The answer is what comes after, and
+        // the same removal serves every engine here — a server running Qwen3
+        // and the app's own copy of it produce the same thing.
+        let text = AgentPrompts.stripWrapping(answer)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw AgentFailure.emptyAnswer(engineName)
@@ -89,11 +91,6 @@ public struct ModelAPITextAgent: TextAgent {
             // then has nothing left to answer with.
             return 512
         }
-    }
-
-    static func afterThinking(_ text: String) -> String {
-        guard let end = text.range(of: "</think>") else { return text }
-        return String(text[end.upperBound...])
     }
 }
 
@@ -136,7 +133,7 @@ public struct ModelAPIVisionReader: PageTranscriber {
             reader: reader,
             pageIndex: page.index,
             blocks: AgentPrompts.blocks(
-                fromTranscription: ModelAPITextAgent.afterThinking(answer),
+                fromTranscription: AgentPrompts.stripReasoning(answer),
                 pageIndex: page.index,
                 language: language
             ),

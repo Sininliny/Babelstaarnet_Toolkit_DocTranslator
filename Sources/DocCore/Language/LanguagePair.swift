@@ -46,6 +46,24 @@ public struct SourceLanguage: Sendable {
     /// Returns every form worth looking for; the caller only needs one of
     /// them to appear.
     public let writtenNumberForms: @Sendable (String) -> [String]
+    /// What this language uses to point outside a sentence, and how short a
+    /// block has to be before it carries no context of its own. See
+    /// `AdaptiveContext`: it is what decides whether a block is translated on
+    /// its own or with the page around it.
+    public let contextCues: ContextCues
+    /// How this script is spelled out in Latin letters when it is spelled
+    /// out rather than translated. Nil for a script that is already written
+    /// in them.
+    ///
+    /// Two things need it, and they are the same thing from opposite ends. A
+    /// translating model needs to be told, by name, what it must not do: an
+    /// instruction that says "do not transliterate" is followed less
+    /// reliably than one that says "Pinyin is not a translation". And
+    /// `TextIntegrity` needs to be able to recognize the failure when it
+    /// happens anyway — a name spelled out syllable by syllable is the one
+    /// mistranslation that a reader who cannot read the source has no way to
+    /// see, because it arrives looking exactly like a word.
+    public let romanization: Romanization?
     /// Pack-supplied cleanup of one reader's raw text: the spaces Vision
     /// inserts between glyphs, the half-width punctuation a model
     /// substitutes, and anything else that is noise in this script but
@@ -62,6 +80,8 @@ public struct SourceLanguage: Sendable {
         sentenceRules: SentenceBoundaryRules,
         expansionRatio: ClosedRange<Double>,
         promptName: String,
+        contextCues: ContextCues = .none,
+        romanization: Romanization? = nil,
         writtenNumberForms: @escaping @Sendable (String) -> [String] = { _ in [] },
         normalizeReading: @escaping @Sendable (String) -> String = { $0 }
     ) {
@@ -74,6 +94,8 @@ public struct SourceLanguage: Sendable {
         self.sentenceRules = sentenceRules
         self.expansionRatio = expansionRatio
         self.promptName = promptName
+        self.contextCues = contextCues
+        self.romanization = romanization
         self.writtenNumberForms = writtenNumberForms
         self.normalizeReading = normalizeReading
     }
@@ -92,6 +114,41 @@ public struct SourceLanguage: Sendable {
         guard !letters.isEmpty else { return 0 }
         let inScript = letters.filter { scriptCharacters.contains($0) }
         return Double(inScript.count) / Double(letters.count)
+    }
+}
+
+/// Spelling a script out in Latin letters, and what that system is called.
+///
+/// A fact about a writing system, so it belongs to the pack: 布洛芬 spells out
+/// as "buluofen" in Pinyin whatever anyone would prefer, and the name of the
+/// drug is "ibuprofen" whatever the characters say. Everything above this
+/// line in the pipeline only knows that some scripts can be spelled out and
+/// that spelling one out is not translating it.
+public struct Romanization: Sendable {
+    /// What the system is called, so a prompt can name it. "Pinyin", not
+    /// "transliteration".
+    public let name: String
+    /// The characters it applies to: the script's own characters, and not
+    /// the punctuation that shares their Unicode blocks. A run is only
+    /// spellable if every character in it is one of these.
+    public let characters: CharacterSet
+    /// One entry per character, without tone marks and in lower case.
+    ///
+    /// Empty when the run cannot be spelled out one character at a time,
+    /// which is the only shape the caller can use: a check that compares a
+    /// window of the source against a word in the translation needs to know
+    /// which characters made which syllables, and a romanizer that returns a
+    /// sentence has not said.
+    public let syllables: @Sendable (String) -> [String]
+
+    public init(
+        name: String,
+        characters: CharacterSet,
+        syllables: @escaping @Sendable (String) -> [String]
+    ) {
+        self.name = name
+        self.characters = characters
+        self.syllables = syllables
     }
 }
 

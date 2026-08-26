@@ -46,6 +46,11 @@ if CommandLine.arguments.contains("--model-state") {
     exit(0)
 }
 
+if CommandLine.arguments.contains("--prompt-probe") {
+    await PromptProbe.run()
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--vlm-probe") {
     await VLMProbe.run()
     exit(0)
@@ -69,6 +74,9 @@ runAlignmentChecks(report)
 await runReconcilerChecks(report)
 runPromptChecks(report)
 await runProfileChecks(report)
+await runNameChecks(report)
+await runContextChecks(report)
+runModelChecks(report)
 runConfidenceChecks(report)
 runLanguageChecks(report)
 runExportChecks(report)
