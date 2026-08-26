@@ -1,73 +1,65 @@
 #if MLXEngine
 
+import DocCore
 import Foundation
+import Hub
+import MLXLLM
 import MLXLMCommon
 import MLXVLM
 
-/// A model the app can carry.
+/// How a model in the app's catalogue is named to MLX.
 ///
-/// Small on purpose. Offering forty models makes the choice the user's
-/// problem, and the choice that matters here has one dimension — how much of
-/// the disk and the memory you are willing to give it — so the catalogue is
-/// three sizes of the same family.
+/// All this module contributes is the translation from an identifier the app
+/// stores to a configuration MLX loads. Which models exist, how large they
+/// are, and whether this Mac can hold one are in `DocCore`, because the build
+/// most people run has no MLX in it — MLX needs Xcode's Metal compiler — and
+/// that build still has to be able to list the models, say what they would
+/// cost, and delete the ones already downloaded.
 ///
-/// Qwen is the family because of what this app does. Its vision models are
-/// trained heavily on Chinese document images, which is exactly the page this
-/// app is pointed at; a general-purpose captioning model reads a photograph
-/// well and a page of dense 宋体 badly.
-public struct MLXModel: Sendable, Identifiable, Equatable {
-    public let id: String
-    public let displayName: String
-    /// Roughly, for the interface to warn with. The real size is whatever the
-    /// repository holds.
-    public let approximateBytes: Int64
-    public let note: String
-    public let configuration: ModelConfiguration
-
-    public static func == (lhs: MLXModel, rhs: MLXModel) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    public var approximateSize: String {
-        ByteCountFormatter.string(
-            fromByteCount: approximateBytes,
-            countStyle: .file
-        )
-    }
-}
-
+/// `configuration(id:)` returns the registry's own entry where the library
+/// knows the repository and a plain configuration where it does not, which is
+/// what lets the catalogue name a model the library has never heard of as
+/// long as its architecture is one MLX implements.
 public enum MLXModelCatalogue {
-    /// The default. Big enough to read a dense page reliably, small enough to
-    /// run on a laptop with other things open.
-    public static let qwen2_5VL3B = MLXModel(
-        id: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
-        displayName: "Qwen2.5-VL 3B",
-        approximateBytes: 2_300_000_000,
-        note: "The balanced choice. Reads dense Chinese pages well.",
-        configuration: VLMRegistry.qwen2_5VL3BInstruct4Bit
-    )
 
-    public static let qwen3VL4B = MLXModel(
-        id: "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
-        displayName: "Qwen3-VL 4B",
-        approximateBytes: 2_900_000_000,
-        note: "Newer and more accurate. Slower, and wants more memory.",
-        configuration: VLMRegistry.qwen3VL4BInstruct4Bit
-    )
+    public static func configuration(
+        for model: LocalModelSpec
+    ) -> ModelConfiguration {
+        switch model.role {
+        case .vision:
+            return VLMModelFactory.shared.configuration(id: model.id)
+        case .text:
+            return LLMModelFactory.shared.configuration(id: model.id)
+        }
+    }
 
-    public static let qwen2VL2B = MLXModel(
-        id: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-        displayName: "Qwen2-VL 2B",
-        approximateBytes: 1_400_000_000,
-        note: "The smallest. For an older Mac, or a tight disk.",
-        configuration: VLMRegistry.qwen2VL2BInstruct4Bit
-    )
-
-    public static let all = [qwen2_5VL3B, qwen3VL4B, qwen2VL2B]
-    public static let `default` = qwen2_5VL3B
-
-    public static func model(id: String) -> MLXModel {
-        all.first { $0.id == id } ?? `default`
+    /// Load a model with the factory for its kind.
+    ///
+    /// Explicitly, rather than through `loadModelContainer`, which tries every
+    /// registered factory in turn. That convenience is wrong here: the vision
+    /// factory is tried first and it *downloads the weights* before it
+    /// discovers it cannot build the model, so a text model would arrive by
+    /// way of a wasted attempt at reading it as a vision one.
+    static func loadContainer(
+        _ model: LocalModelSpec,
+        hub: HubApi,
+        progress: @Sendable @escaping (Progress) -> Void
+    ) async throws -> ModelContainer {
+        let configuration = configuration(for: model)
+        switch model.role {
+        case .vision:
+            return try await VLMModelFactory.shared.loadContainer(
+                hub: hub,
+                configuration: configuration,
+                progressHandler: progress
+            )
+        case .text:
+            return try await LLMModelFactory.shared.loadContainer(
+                hub: hub,
+                configuration: configuration,
+                progressHandler: progress
+            )
+        }
     }
 }
 

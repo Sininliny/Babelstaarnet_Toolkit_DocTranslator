@@ -12,6 +12,52 @@ import UniformTypeIdentifiers
 
 /// The two output modes that produce a file rather than a report.
 func runOutputModeChecks(_ report: Report) async {
+    report.begin("output/naming")
+    // The interface builds controls out of these. The save button used to be
+    // built by lowercasing `displayName`, which produced "Save the same
+    // document, in english…" — a sentence, mid-word, with the capital gone.
+    // These exist so a control has something to be made of, and the check is
+    // that they stay fit for one.
+    var shortNames: Set<String> = []
+    var saveTitles: Set<String> = []
+    for mode in OutputMode.allCases {
+        report.expect(
+            !mode.shortName.isEmpty && mode.shortName.count <= 20,
+            "\(mode.rawValue): the short name fits on a control"
+        )
+        report.expect(
+            mode.saveTitle.hasPrefix("Save") && mode.saveTitle.hasSuffix("…"),
+            "\(mode.rawValue): the save title reads as a save command"
+        )
+        report.expect(
+            !mode.saveTitle.contains(mode.displayName),
+            "\(mode.rawValue): the save title is not the sentence"
+        )
+        report.expect(
+            !mode.symbol.isEmpty,
+            "\(mode.rawValue): has a symbol for its card"
+        )
+        shortNames.insert(mode.shortName)
+        saveTitles.insert(mode.saveTitle)
+    }
+    report.equal(
+        shortNames.count,
+        OutputMode.allCases.count,
+        "no two modes share a short name"
+    )
+    report.equal(
+        saveTitles.count,
+        OutputMode.allCases.count,
+        "no two modes share a save title"
+    )
+    for format in StyledFormat.allCases {
+        report.expect(
+            !format.fileExtension.isEmpty
+                && !format.fileExtension.hasPrefix("."),
+            "\(format.rawValue): the extension is a suffix, not a filename"
+        )
+    }
+
     report.begin("output/plain text")
     let chinese = SimplifiedChinese.language
 
@@ -23,7 +69,7 @@ func runOutputModeChecks(_ report: Report) async {
         "the plain text carries the translation"
     )
     // The point of this mode is that there is nothing to strip out.
-    for markup in ["#", ">", "<", "⚠︎", "**", "Læsesalen", "Vision"] {
+    for markup in ["#", ">", "<", "⚠︎", "**", "Laesesalen", "Vision"] {
         report.expect(
             !text.contains(markup),
             "plain text must not contain \(markup)"

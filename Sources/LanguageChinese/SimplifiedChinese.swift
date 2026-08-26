@@ -73,6 +73,8 @@ public enum SimplifiedChinese {
         // came back as one line or as three pages, not to grade prose.
         expansionRatio: 0.8...4.5,
         promptName: "Simplified Chinese",
+        contextCues: contextCues,
+        romanization: pinyin,
         writtenNumberForms: writtenForms(of:),
         normalizeReading: normalize(_:)
     )
@@ -81,6 +83,102 @@ public enum SimplifiedChinese {
         source: language,
         target: .english
     )
+
+    /// What a Chinese block uses to point at something that is not in it.
+    ///
+    /// The list is deliberately made of two-character expressions rather than
+    /// the obvious single characters. 本 and 其 are in a very large share of
+    /// official Chinese — 本院, 本通知, 其他 — so a rule that fired on them
+    /// would widen the context for nearly every block on nearly every page,
+    /// which costs exactly as much as never adapting at all and produces the
+    /// failure the adaptation exists to avoid. 上述 and 前款 are unambiguous:
+    /// each of them says, in as many words, that the thing being referred to
+    /// is somewhere else.
+    ///
+    /// Twenty characters is where a Chinese block stops being a sentence.
+    /// A hanzi carries about as much as a short English word, so twenty of
+    /// them is a line of prose; below that, on the documents this app is
+    /// pointed at, it is a heading, a table cell, a party's name, or a date.
+    public static let contextCues = ContextCues(
+        referring: [
+            "该", "上述", "前述", "该等", "前款", "本款", "本条", "本项",
+            "同上", "如前", "上款", "前项", "其中", "此项", "上款所述"
+        ],
+        continuing: [
+            "但", "但是", "并", "并且", "而且", "因此", "所以", "否则",
+            "此外", "同时", "其次", "另外", "如前所述", "为此", "据此"
+        ],
+        selfContainedLength: 20,
+        // 应该 and 不该 are "ought to" and "ought not to". Both contain 该,
+        // which is the strongest referring cue in the list, and both are in
+        // roughly every second sentence of an official Chinese document.
+        falseFriends: ["应该", "不该", "活该", "该死"]
+    )
+
+    /// The ideographs alone — the characters that have a Pinyin reading.
+    ///
+    /// Narrower than `scriptCharacters`, which also carries 。、《》 and the
+    /// full-width forms, because those are punctuation: they have no reading,
+    /// and a run that includes one cannot be spelled out character by
+    /// character.
+    public static let ideographs: CharacterSet = {
+        var set = CharacterSet()
+        set.insert(charactersIn: "\u{4E00}"..."\u{9FFF}")   // CJK Unified
+        set.insert(charactersIn: "\u{3400}"..."\u{4DBF}")   // Extension A
+        set.insert(charactersIn: "\u{F900}"..."\u{FAFF}")   // Compatibility
+        return set
+    }()
+
+    /// Chinese spelled out in Latin letters, which is what a translation is
+    /// not.
+    ///
+    /// This is the pack's half of the app's answer to the worst thing a
+    /// translator can do to a prescription. 布洛芬 is ibuprofen; a model that
+    /// renders it character by character writes "Buluofen", which is not a
+    /// word in any language and names no drug, and which arrives in an
+    /// otherwise fluent English sentence where a reader who cannot read
+    /// Chinese will take it for the name of their medicine. Nothing about
+    /// the output looks wrong. So the app spells the source out itself and
+    /// looks for the result in the English: if it is there, the model did the
+    /// one thing it was told not to.
+    ///
+    /// Tone marks are stripped and the case is folded because the English is
+    /// searched for a word, and no translation writes "Bùluòfēn".
+    public static let pinyin = Romanization(
+        name: "Pinyin",
+        characters: ideographs,
+        syllables: syllables(of:)
+    )
+
+    /// One syllable per character, or nothing.
+    ///
+    /// Whole runs are transliterated rather than single characters, because
+    /// which reading a character takes depends on the ones beside it — 行 is
+    /// xíng in 银行业 and háng in 银行 — and a per-character lookup would get
+    /// the common cases wrong in both directions. The count is then checked
+    /// against the run: a transform that returned some other number of
+    /// syllables has not told the caller which character made which, and the
+    /// caller has no use for an answer it cannot align.
+    @Sendable
+    public static func syllables(of text: String) -> [String] {
+        let characters = Array(text)
+        guard !characters.isEmpty,
+              characters.allSatisfy({
+                  $0.unicodeScalars.allSatisfy(ideographs.contains)
+              })
+        else { return [] }
+
+        guard let latin = text.applyingTransform(.toLatin, reverse: false)
+        else { return [] }
+        let plain = latin.applyingTransform(.stripDiacritics, reverse: false)
+            ?? latin
+        let syllables = plain
+            .lowercased()
+            .split(whereSeparator: { $0 == " " || $0 == "'" })
+            .map(String.init)
+        guard syllables.count == characters.count else { return [] }
+        return syllables
+    }
 
     /// What a reader's raw text needs before it can be compared with another
     /// reader's.

@@ -91,9 +91,25 @@ public struct BlockTranslator: Sendable {
             )
         }
 
-        let draft: String
+        // How much of the page around this block it turns out to need. A
+        // sentence that stands on its own is translated on its own; one that
+        // points at something outside itself is shown what it points at. See
+        // `ContextNeed` for why this is decided per block rather than settled
+        // once for the document.
+        let need = AdaptiveContext.need(
+            for: block.text,
+            kind: block.kind,
+            available: context,
+            language: languages.source
+        )
+
+        var attempt: Attempt
         do {
-            draft = try await translated(block, following: context)
+            attempt = try await translate(
+                block,
+                following: context,
+                need: need
+            )
         } catch {
             return TranslatedBlock(
                 source: block,
@@ -109,55 +125,113 @@ public struct BlockTranslator: Sendable {
                 confidence: Confidence(
                     score: 0,
                     reasons: [error.localizedDescription]
-                )
+                ),
+                context: need
             )
         }
 
-        let secondDraft = await secondDraft(of: block)
-        let translatorAgreement = secondDraft.map {
-            TextSimilarity.score(draft, $0)
+        // A block handed back as its own source, having been shown the page
+        // around it, gets one more try with nothing around it. See
+        // `ContextNeed.retriedAlone` for the measurement behind this: context
+        // in front of a block that is nearly all figures is enough to tip a
+        // small model from translating into copying, and the mechanical check
+        // has already noticed. The second call is paid only where the first
+        // one demonstrably failed, and it is kept only if it did better.
+        var spent = need
+        if attempt.copiedTheSource, !need.isEmpty,
+           let alone = try? await translate(
+               block,
+               following: .none,
+               need: .none
+           ), !alone.copiedTheSource {
+            attempt = alone
+            spent = .alone
         }
-
-        let verdict = await review(block: block, draft: draft)
-        let final = verdict?.revision ?? draft
-
-        let findings = TextIntegrity.check(
-            source: block.text,
-            translation: final,
-            language: languages.source,
-            target: languages.target,
-            brief: brief,
-            profile: profile
-        )
 
         return TranslatedBlock(
             source: block,
-            firstDraft: draft,
-            revision: verdict?.revision,
-            findings: findings,
+            firstDraft: attempt.draft,
+            revision: attempt.verdict?.revision,
+            findings: attempt.findings,
             confidence: ConfidenceScoring.score(
                 ConfidenceScoring.Inputs(
                     agreement: block.agreement,
                     settlement: block.settlement,
-                    findings: findings,
-                    translatorAgreement: translatorAgreement,
-                    reviewed: verdict != nil,
-                    revised: verdict?.revision != nil
+                    findings: attempt.findings,
+                    translatorAgreement: attempt.translatorAgreement,
+                    reviewed: attempt.verdict != nil,
+                    revised: attempt.verdict?.revision != nil
                 )
-            )
+            ),
+            context: spent
+        )
+    }
+
+    /// One go at a block: translate it, take a second opinion, review it, and
+    /// run the mechanical checks over what comes out.
+    ///
+    /// Separated out because it is done twice for a block that comes back
+    /// untranslated, and a second attempt that skipped the review would be a
+    /// different question rather than the same one asked again.
+    private struct Attempt {
+        var draft: String
+        var verdict: AgentPrompts.ReviewVerdict?
+        var findings: [IntegrityFinding]
+        var translatorAgreement: Double?
+
+        /// Whether the translator handed the source back rather than
+        /// translating it. Both findings mean that: one for an answer
+        /// identical to the source, one for an answer still largely in the
+        /// source script.
+        var copiedTheSource: Bool {
+            findings.contains {
+                $0.kind == .echoedSource || $0.kind == .untranslatedScript
+            }
+        }
+    }
+
+    private func translate(
+        _ block: ReconciledBlock,
+        following context: TranslationContext,
+        need: ContextNeed
+    ) async throws -> Attempt {
+        let draft = try await translated(
+            block,
+            following: context,
+            need: need
+        )
+        let secondDraft = await secondDraft(of: block)
+        let verdict = await review(block: block, draft: draft)
+        let final = verdict?.revision ?? draft
+        return Attempt(
+            draft: draft,
+            verdict: verdict,
+            findings: TextIntegrity.check(
+                source: block.text,
+                translation: final,
+                language: languages.source,
+                target: languages.target,
+                brief: brief,
+                profile: profile
+            ),
+            translatorAgreement: secondDraft.map {
+                TextSimilarity.score(draft, $0)
+            }
         )
     }
 
     private func translated(
         _ block: ReconciledBlock,
-        following context: TranslationContext
+        following context: TranslationContext,
+        need: ContextNeed
     ) async throws -> String {
         if let agentTranslator = translator as? TextAgentTranslator {
             return try await agentTranslator.translate(
                 block.text,
                 kind: block.kind,
                 languages: languages,
-                following: context
+                following: context,
+                need: need
             )
         }
         // A dedicated translation model takes no context and no
@@ -186,7 +260,8 @@ public struct BlockTranslator: Sendable {
                     languages: languages,
                     brief: brief,
                     profile: profile,
-                    agreedTerms: profile.termLines(appearingIn: block.text)
+                    agreedTerms: profile.termLines(appearingIn: block.text),
+                    agreedNames: profile.nameLines(appearingIn: block.text)
                 ),
                 prompt: AgentPrompts.reviewPrompt(
                     source: block.text,

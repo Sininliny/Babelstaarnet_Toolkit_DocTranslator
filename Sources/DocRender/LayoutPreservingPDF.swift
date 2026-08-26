@@ -97,7 +97,7 @@ public enum LayoutPreservingPDF {
             [
                 kCGPDFContextTitle as String:
                     document.source.displayName + " (English)",
-                kCGPDFContextCreator as String: "Læsesalen"
+                kCGPDFContextCreator as String: "Laesesalen"
             ] as CFDictionary
         ) else {
             throw Failure.couldNotStartPDF

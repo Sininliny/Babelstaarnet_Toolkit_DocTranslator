@@ -1,4 +1,5 @@
 import Combine
+import DocCore
 import Foundation
 #if MLXEngine
 import DocMLX
@@ -23,12 +24,26 @@ public struct LocalModelStatus: Sendable, Equatable {
     }
 
     public var stage: Stage
+    /// Which model this is the state of, so a window showing five of them can
+    /// tell them apart.
+    public var modelID: String
     public var modelName: String
     public var approximateSize: String
 
     public static let notBuiltIn = LocalModelStatus(
         stage: .notBuiltIn,
+        modelID: "",
         modelName: "Local vision model",
+        approximateSize: ""
+    )
+
+    /// The state of a model this build could run but the reader has not
+    /// chosen. Distinct from `notFetched`, which is about a model that *is*
+    /// chosen and has not arrived.
+    public static let notChosen = LocalModelStatus(
+        stage: .notFetched,
+        modelID: "",
+        modelName: "No separate model",
         approximateSize: ""
     )
 
@@ -65,7 +80,8 @@ public struct LocalModelStatus: Sendable, Equatable {
 #if MLXEngine
 
 extension LocalModelStatus {
-    init(_ state: MLXModelState, model: MLXModel) {
+    init(_ state: MLXModelState, model: LocalModelSpec) {
+        self.modelID = model.id
         self.modelName = model.displayName
         self.approximateSize = model.approximateSize
         switch state {

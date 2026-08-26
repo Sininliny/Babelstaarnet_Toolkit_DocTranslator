@@ -33,15 +33,31 @@ public struct ClarificationAgent: Sendable {
         self.limit = limit
     }
 
-    /// - Parameter sample: the `DocumentSurvey`'s reading of the document —
-    ///   the same text the profile was built from. The questions worth asking
-    ///   are rarely all raised by the first page: a term of art that only
-    ///   turns up in the middle of a contract is exactly the kind of thing
-    ///   the reader can settle and the app cannot.
+    /// - Parameters:
+    ///   - sample: the `DocumentSurvey`'s reading of the document — the same
+    ///     text the profile was built from. The questions worth asking are
+    ///     rarely all raised by the first page: a term of art that only turns
+    ///     up in the middle of a contract is exactly the kind of thing the
+    ///     reader can settle and the app cannot.
+    ///   - profile: what the document turned out to be. Consulted for one
+    ///     thing: whether the field is still unknown. If the app could not
+    ///     work out what kind of work this document belongs to, that question
+    ///     is asked first and ahead of anything the model thought of, because
+    ///     no other answer changes as many words. It decides what every name
+    ///     in the document is called.
     public func questions(
-        from sample: String
+        from sample: String,
+        profile: DocumentProfile = .unknown
     ) async -> [ClarificationQuestion] {
         guard sample.count >= Self.minimumSample else { return [] }
+        // Asked by the app rather than by a model, and asked whenever the
+        // field is unknown rather than when a model thinks to wonder about
+        // it. A model that has just failed to say what field a document
+        // belongs to is not the right participant to decide whether that
+        // matters.
+        let ownQuestions = profile.field.isKnown
+            ? []
+            : [DocumentField.clarification]
         do {
             let answer = try await agent.answer(
                 instructions: AgentPrompts.clarificationInstructions(
@@ -50,12 +66,17 @@ public struct ClarificationAgent: Sendable {
                 prompt: AgentPrompts.clarificationPrompt(sample: sample),
                 expecting: .prose(approximately: 900)
             )
-            return AgentPrompts.questions(from: answer, limit: limit)
+            return Array(
+                (ownQuestions
+                    + AgentPrompts.questions(from: answer, limit: limit))
+                    .prefix(limit)
+            )
         } catch {
-            // Not being able to ask is not a reason to stop. The translation
-            // proceeds on the document alone, which is what it would have
-            // done before this stage existed.
-            return []
+            // Not being able to ask a model is not a reason to stop, and
+            // not a reason to drop the app's own question either: the field
+            // still decides every name in the document, and asking about it
+            // needs no model.
+            return ownQuestions
         }
     }
 }

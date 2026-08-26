@@ -17,7 +17,7 @@ public enum IngestFailure: LocalizedError {
         case .unreadable(let url):
             return "\(url.lastPathComponent) could not be opened."
         case .unsupportedType(let type):
-            return "\(type) is not a kind of file Læsesalen reads."
+            return "\(type) is not a kind of file Laesesalen reads."
         case .noPages(let url):
             return "\(url.lastPathComponent) has no pages."
         case .pageOutOfRange(let index):

@@ -17,6 +17,14 @@ import DocMLX
 /// Translation framework does the translating. Nothing is downloaded, nothing
 /// is installed, and nothing is configured.
 ///
+/// Above that sit the app's own models, which are the only engines here that
+/// do not depend on what Apple has decided this Mac is eligible for. There
+/// are at most two: one that reads pages, and — on a Mac with the memory for
+/// both at once — a second that does the text work. Which ones, and whether
+/// the second exists at all, is decided from the machine rather than fixed,
+/// because the same default is wrong on an eight-gigabyte laptop and on a Mac
+/// with sixty-four.
+///
 /// A user-run model server is the exception rather than the plan. It exists
 /// for the two cases the built-in models do not cover — a Mac without Apple
 /// Intelligence, and a document a small model reads badly — and it is off
@@ -25,32 +33,75 @@ import DocMLX
 public final class EngineDirectory {
     private let ledger: PrivacyLedger
     private let translationEngine = AppleTranslationEngine()
-    /// Called whenever the app's own model changes state, so the window can
-    /// show a download getting on with itself.
+    /// Called whenever one of the app's own models changes state, so the
+    /// window can show a download getting on with itself.
     public var onLocalModelState: (@MainActor (LocalModelStatus) -> Void)?
+    public var onTextModelState: (@MainActor (LocalModelStatus) -> Void)?
 
     #if MLXEngine
-    private var store: MLXModelStore?
+    /// The stores, once they have been built. Named apart from the methods
+    /// that build them because a property and a method of the same name
+    /// compile and do not read.
+    private var builtVisionStore: MLXModelStore?
+    private var builtTextStore: MLXModelStore?
     #endif
 
     public init(ledger: PrivacyLedger) {
         self.ledger = ledger
     }
 
-    // MARK: - The app's own model
+    // MARK: - This Mac
+
+    /// Read afresh rather than remembered. Free disk is different between one
+    /// document and the next, and a recommendation made from a stale reading
+    /// is a download that fails half way.
+    public func machine() -> MachineCapability {
+        MachineCapability.thisMac(diskAt: LocalModelStorage.defaultRoot)
+    }
+
+    /// Which model reads the pages: the reader's choice where they have made
+    /// one, and otherwise the largest this Mac can hold comfortably.
+    public func visionModel(_ preferences: Preferences) -> LocalModelSpec {
+        if let chosen = LocalModelCatalogue.model(id: preferences.localModelID),
+           chosen.role == .vision {
+            return chosen
+        }
+        return LocalModelCatalogue.recommendedVisionModel(
+            for: machine(),
+            alreadyOnDisk: downloadedModels()
+        )
+    }
+
+    /// The separate text model, where the reader has chosen one. `nil` — the
+    /// page reader does the text work too — is the ordinary answer and not a
+    /// failure.
+    public func textModel(_ preferences: Preferences) -> LocalModelSpec? {
+        guard let chosen = LocalModelCatalogue.model(id: preferences.textModelID),
+              chosen.role == .text else { return nil }
+        return chosen
+    }
+
+    // MARK: - The app's own models
 
     /// Built on first use rather than at launch, because building it looks at
     /// the disk and an app should not do that before anyone has asked it for
     /// anything.
     #if MLXEngine
-    private func modelStore(_ preferences: Preferences) -> MLXModelStore {
-        if let store { return store }
-        let model = MLXModelCatalogue.model(id: preferences.localModelID)
+    private func store(
+        for model: LocalModelSpec,
+        existing: MLXModelStore?,
+        report: (@MainActor (LocalModelStatus) -> Void)?
+    ) async -> MLXModelStore {
         let ledger = self.ledger
-        let report = self.onLocalModelState
-        let fresh = MLXModelStore(
+        if let existing {
+            // The reader may have changed their mind since it was built. A
+            // store told to hold a different model drops the one it had.
+            await existing.use(model)
+            return existing
+        }
+        return MLXModelStore(
             model: model,
-            onEvent: { state in
+            onEvent: { state, model in
                 Task { @MainActor in
                     report?(LocalModelStatus(state, model: model))
                 }
@@ -69,7 +120,37 @@ public final class EngineDirectory {
                 }
             }
         )
-        store = fresh
+    }
+
+    private func visionStore(
+        _ preferences: Preferences
+    ) async -> MLXModelStore {
+        let fresh = await store(
+            for: visionModel(preferences),
+            existing: builtVisionStore,
+            report: onLocalModelState
+        )
+        builtVisionStore = fresh
+        return fresh
+    }
+
+    /// `nil` where no separate text model is configured, which is the usual
+    /// case: the page reader answers the text questions as well.
+    private func textStore(
+        _ preferences: Preferences
+    ) async -> MLXModelStore? {
+        guard let model = textModel(preferences) else {
+            // Dropping the reference is what gives the memory back: the
+            // container goes with it.
+            builtTextStore = nil
+            return nil
+        }
+        let fresh = await store(
+            for: model,
+            existing: builtTextStore,
+            report: onTextModelState
+        )
+        builtTextStore = fresh
         return fresh
     }
     #endif
@@ -78,9 +159,25 @@ public final class EngineDirectory {
         _ preferences: Preferences
     ) async -> LocalModelStatus {
         #if MLXEngine
-        let store = modelStore(preferences)
-        let model = await store.model
-        return LocalModelStatus(await store.currentState(), model: model)
+        let store = await visionStore(preferences)
+        return LocalModelStatus(
+            await store.currentState(),
+            model: await store.model
+        )
+        #else
+        return .notBuiltIn
+        #endif
+    }
+
+    public func textModelStatus(
+        _ preferences: Preferences
+    ) async -> LocalModelStatus {
+        #if MLXEngine
+        guard let store = await textStore(preferences) else { return .notChosen }
+        return LocalModelStatus(
+            await store.currentState(),
+            model: await store.model
+        )
         #else
         return .notBuiltIn
         #endif
@@ -90,22 +187,72 @@ public final class EngineDirectory {
     /// read a page, or throws with something the reader can act on.
     public func prepareLocalModel(_ preferences: Preferences) async throws {
         #if MLXEngine
-        _ = try await modelStore(preferences).prepare()
+        _ = try await visionStore(preferences).prepare()
         #else
         throw LocalModelUnavailable.notBuiltIn
         #endif
     }
 
-    public func removeLocalModel(_ preferences: Preferences) async throws {
+    public func prepareTextModel(_ preferences: Preferences) async throws {
         #if MLXEngine
-        try await modelStore(preferences).removeFromDisk()
+        guard let store = await textStore(preferences) else { return }
+        _ = try await store.prepare()
+        #else
+        throw LocalModelUnavailable.notBuiltIn
         #endif
+    }
+
+    /// Delete one model's weights, whichever store — if any — is holding it.
+    @discardableResult
+    public func removeModel(
+        id: String,
+        _ preferences: Preferences
+    ) async throws -> Int64 {
+        #if MLXEngine
+        // Through the stores rather than around them: the model being deleted
+        // may be one that is loaded, and deleting the weights out from under
+        // a live container leaves an app that works until the next launch.
+        let freed = try await visionStore(preferences).remove(id: id)
+        if let text = await textStore(preferences) {
+            _ = try? await text.remove(id: id)
+        }
+        return freed
+        #else
+        return try LocalModelStorage.remove(id, in: LocalModelStorage.defaultRoot)
+        #endif
+    }
+
+    /// Everything on this Mac that nothing is going to use, removed.
+    ///
+    /// Two kinds, and the second is the one that would otherwise never be
+    /// mentioned again: a model the reader tried and moved on from, and one a
+    /// previous version of the app downloaded and this one no longer offers
+    /// at all.
+    @discardableResult
+    public func removeUnusedModels(
+        _ preferences: Preferences
+    ) async throws -> Int64 {
+        var freed: Int64 = 0
+        for model in unusedModels(preferences) {
+            freed += (try? await removeModel(id: model.id, preferences)) ?? 0
+        }
+        return freed
+    }
+
+    public func unusedModels(_ preferences: Preferences) -> [InstalledModel] {
+        var inUse: Set<String> = [visionModel(preferences).id]
+        if let text = textModel(preferences) { inUse.insert(text.id) }
+        return LocalModelStorage.unused(
+            keeping: inUse,
+            in: LocalModelStorage.defaultRoot
+        )
     }
 
     /// Give the memory back between documents.
     public func unloadLocalModel() async {
         #if MLXEngine
-        await store?.unload()
+        await builtVisionStore?.unload()
+        await builtTextStore?.unload()
         #endif
     }
 
@@ -149,14 +296,33 @@ public final class EngineDirectory {
         }
 
         #if MLXEngine
-        let local = modelStore(preferences)
-        let localModel = await local.model
-        let localAgent = MLXTextAgent(store: local, name: localModel.displayName)
         if preferences.useLocalModel {
-            statuses.append(await localAgent.status(for: .pageReader))
-            statuses.append(await localAgent.status(for: .adjudicator))
-            statuses.append(await localAgent.status(for: .translator))
-            statuses.append(await localAgent.status(for: .reviewer))
+            let vision = await visionStore(preferences)
+            let visionModel = await vision.model
+            let visionAgent = MLXTextAgent(
+                store: vision,
+                name: visionModel.displayName
+            )
+            statuses.append(await visionAgent.status(for: .pageReader))
+
+            // The text roles go to the separate model where there is one, and
+            // to the page reader where there is not. Only one of the two is
+            // listed for each role: a screen that names two engines for the
+            // same job is a screen that cannot say which one did it.
+            if let text = await textStore(preferences) {
+                let textModel = await text.model
+                let textAgent = MLXTextAgent(
+                    store: text,
+                    name: textModel.displayName
+                )
+                statuses.append(await textAgent.status(for: .adjudicator))
+                statuses.append(await textAgent.status(for: .translator))
+                statuses.append(await textAgent.status(for: .reviewer))
+            } else {
+                statuses.append(await visionAgent.status(for: .adjudicator))
+                statuses.append(await visionAgent.status(for: .translator))
+                statuses.append(await visionAgent.status(for: .reviewer))
+            }
         }
         #endif
 
@@ -213,25 +379,35 @@ public final class EngineDirectory {
             textAgent = systemAgent
         }
 
-        // The app's own model, where the reader has fetched it. It leads the
-        // text roles over Apple's system model for one reason: it is a
-        // several-billion-parameter model chosen for Chinese documents, and
-        // it is available whether or not Apple Intelligence is.
+        // The app's own models, where the reader has fetched them. They lead
+        // the text roles over Apple's system model for one reason: they are
+        // several-billion-parameter models chosen for Chinese documents, and
+        // they are available whether or not Apple Intelligence is.
         #if MLXEngine
         if preferences.useLocalModel {
-            let local = modelStore(preferences)
-            let localModel = await local.model
+            let vision = await visionStore(preferences)
+            let visionModel = await vision.model
             // On disk or already loaded. A model that is still downloading,
             // or that failed, is not a reader — and quietly waiting for a
-            // 2 GB download in the middle of someone's first page would look
-            // exactly like the app having hung.
-            let state = await local.currentState()
-            if state == .onDisk || state == .ready {
+            // multi-gigabyte download in the middle of someone's first page
+            // would look exactly like the app having hung.
+            if await vision.isUsable {
                 readers.removeAll { $0.reader == .visionLanguageModel }
-                readers.append(MLXVisionReader(store: local))
+                readers.append(MLXVisionReader(store: vision))
                 textAgent = MLXTextAgent(
-                    store: local,
-                    name: localModel.displayName
+                    store: vision,
+                    name: visionModel.displayName
+                )
+            }
+            // A separate text model supersedes it in the text roles. It only
+            // exists on a Mac that can hold both at once, which is what makes
+            // it worth two sets of resident weights: a dedicated text model
+            // translates and reviews appreciably better than a vision model
+            // of the same size.
+            if let text = await textStore(preferences), await text.isUsable {
+                textAgent = MLXTextAgent(
+                    store: text,
+                    name: await text.model.displayName
                 )
             }
         }
@@ -281,23 +457,19 @@ public final class EngineDirectory {
         )
     }
 
-    /// Which of the models on offer are already on this Mac.
+    /// Which of the models on offer are already on this Mac, and how much of
+    /// the disk they are taking.
     ///
     /// The interface needs this because the choice is otherwise invisible:
-    /// three models in a picker look interchangeable, and switching to one
-    /// that is not here turns a working app into "the model has not been
+    /// five models in a list look interchangeable, and switching to one that
+    /// is not here turns a working app into "the model has not been
     /// downloaded yet" with no hint that the previous choice still is.
+    public func installedModels() -> [InstalledModel] {
+        LocalModelStorage.installed(in: LocalModelStorage.defaultRoot)
+    }
+
     public func downloadedModels() -> Set<String> {
-        #if MLXEngine
-        let root = MLXModelStore.defaultRoot
-        return Set(
-            MLXModelCatalogue.all
-                .filter { MLXModelStore.isOnDisk($0, root: root) }
-                .map(\.id)
-        )
-        #else
-        return []
-        #endif
+        Set(installedModels().filter(\.isComplete).map(\.id))
     }
 
     /// Whether the translation model for this pair is downloaded, which is

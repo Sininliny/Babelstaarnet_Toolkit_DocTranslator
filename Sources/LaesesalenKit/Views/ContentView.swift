@@ -4,13 +4,50 @@ import DocIngest
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Which sheet is up. A view's own state, held in an object because `@State`
-/// is a macro whose plugin ships with Xcode — see `PrivacyLedger` for why
-/// this project stays on `ObservableObject` throughout.
-final class WindowState: ObservableObject {
-    @Published var showsBrief = false
-    @Published var showsPrivacy = false
-    @Published var showsEngines = false
+/// Which tab of the settings window is showing.
+public enum SettingsTab: String, CaseIterable, Identifiable, Sendable {
+    case engines
+    case models
+    case defaults
+
+    public var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .engines: return "Engines"
+        case .models: return "Models"
+        case .defaults: return "Defaults"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .engines: return "gearshape.2"
+        case .models: return "internaldrive"
+        case .defaults: return "text.quote"
+        }
+    }
+}
+
+/// What is open, as distinct from what the app is doing.
+///
+/// A view's own state, held in an object because `@State` is a macro whose
+/// plugin ships with Xcode — see `PrivacyLedger` for why this project stays
+/// on `ObservableObject` throughout. It is owned by the app rather than by
+/// the window now, because the menu bar opens these too, and a menu is not
+/// inside the view hierarchy that used to hold them.
+public final class WindowState: ObservableObject {
+    @Published public var showsBrief = false
+    /// The whole ledger, every line of it.
+    @Published public var showsPrivacy = false
+    /// The one-paragraph answer, hanging off the lock in the corner. Most of
+    /// the time the answer is "nothing has left this Mac", and making someone
+    /// open a window with a seven-column table in it to be told that is
+    /// making them work for the reassurance the app exists to give.
+    @Published public var showsPrivacySummary = false
+    @Published public var settingsTab = SettingsTab.engines
+
+    public init() {}
 }
 
 /// The whole window.
@@ -18,11 +55,21 @@ final class WindowState: ObservableObject {
 /// One screen, three states, no navigation. A document translator is a thing
 /// you point at a file and read the answer from; anything the reader has to
 /// find their way around is in the way.
+///
+/// What changed: the two panels that are about the *app* rather than about
+/// this document — which engines exist, what has been downloaded — used to be
+/// sheets, one of them opening a second sheet on top of itself. A sheet is a
+/// question the app is asking, and neither of those was a question; both were
+/// reference. They are a settings window now, at ⌘, where a Mac user already
+/// looks for them, and the window behind stays usable while they are open.
 public struct ContentView: View {
-    @StateObject private var model = AppModel()
-    @StateObject private var window = WindowState()
+    @ObservedObject private var model: AppModel
+    @ObservedObject private var window: WindowState
 
-    public init() {}
+    public init(model: AppModel, window: WindowState) {
+        self.model = model
+        self.window = window
+    }
 
     public var body: some View {
         VStack(spacing: 0) {
@@ -34,12 +81,17 @@ public struct ContentView: View {
             case .finished(let document):
                 DocumentView(model: model, document: document)
             case .failed(let message):
-                FailureView(message: message) { model.reset() }
+                FailureView(model: model, message: message)
             }
             Divider()
             StatusBar(model: model, window: window)
         }
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(
+            minWidth: Metrics.minWindowWidth,
+            minHeight: Metrics.minWindowHeight
+        )
+        .navigationTitle(title)
+        .navigationSubtitle(subtitle)
         .task { await model.refreshEngines() }
         .sheet(isPresented: $window.showsBrief) {
             BriefEditor(model: model)
@@ -47,20 +99,47 @@ public struct ContentView: View {
         .sheet(isPresented: $window.showsPrivacy) {
             PrivacyPanel(ledger: model.ledger)
         }
-        .sheet(isPresented: $window.showsEngines) {
-            EngineListView(model: model)
-        }
         .sheet(isPresented: questionsPresented) {
             ClarificationSheet(model: model)
         }
         .toolbar {
-            ToolbarItemGroup {
-                Button("Translation brief") { window.showsBrief = true }
-                    .help("What you want from this translation")
-                if model.phase.isWorking {
-                    Button("Stop") { model.cancel() }
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    window.showsBrief = true
+                } label: {
+                    // The count is on the control because a brief written
+                    // last week is applied silently to today's document, and
+                    // "3" is the whole warning.
+                    Label(
+                        model.brief.guidanceLines.isEmpty
+                            ? "Brief"
+                            : "Brief (\(model.brief.guidanceLines.count))",
+                        systemImage: "text.quote"
+                    )
                 }
+                .help("What you want from this translation")
             }
+        }
+    }
+
+    /// The window says which document it is holding. It is the only place
+    /// that can: there is no document browser and no recents list, so a
+    /// reader with two Laesesalen windows open has nothing else to tell them
+    /// apart by.
+    private var title: String {
+        model.openDocument?.displayName ?? "Laesesalen"
+    }
+
+    private var subtitle: String {
+        switch model.phase {
+        case .idle: return "简体中文 into English, on this Mac"
+        case .working: return model.progress.activity
+        case .finished(let document):
+            let attention = document.needingAttention.count
+            return attention == 0
+                ? "Every block passed"
+                : "\(attention) need a human eye"
+        case .failed: return "Did not finish"
         }
     }
 
@@ -77,35 +156,65 @@ public struct ContentView: View {
     }
 }
 
-/// The line along the bottom: what is available, and where the receipts are.
+// MARK: - The line along the bottom
+
+/// What is available, and where the receipts are.
+///
+/// Both of these used to be `.plain` buttons, which on macOS means text that
+/// is indistinguishable from a label. The two most reassuring facts the app
+/// has — that it is ready, and that nothing has left the machine — were
+/// sitting in the corner looking like they could not be pressed.
 struct StatusBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var window: WindowState
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         HStack(spacing: 12) {
-            Button { window.showsEngines = true } label: {
-                Label(
-                    engineSummary,
-                    systemImage: model.canTranslate
-                        ? "checkmark.seal"
-                        : "exclamationmark.triangle"
-                )
+            StatusBarButton(
+                text: engineSummary,
+                symbol: model.canTranslate
+                    ? "checkmark.seal.fill"
+                    : "exclamationmark.triangle.fill",
+                tint: model.canTranslate ? .secondary : .orange,
+                help: "Which engines are doing the work"
+            ) {
+                window.settingsTab = .engines
+                openSettings()
             }
-            .buttonStyle(.plain)
-            .help("Which engines are doing the work")
+
+            if model.preferences.useLocalServer {
+                Chip("model server", symbol: "network")
+                    .help("A server on this Mac is in the pipeline")
+            }
 
             Spacer()
 
-            Button { window.showsPrivacy = true } label: {
-                Label(privacySummary, systemImage: "lock")
+            StatusBarButton(
+                text: privacySummary,
+                symbol: model.ledger.documentsStayedOnThisMac
+                    ? "lock.fill"
+                    : "lock.trianglebadge.exclamationmark.fill",
+                tint: model.ledger.documentsStayedOnThisMac
+                    ? .secondary
+                    : .red,
+                help: "Every connection this app has made"
+            ) {
+                window.showsPrivacySummary = true
             }
-            .buttonStyle(.plain)
-            .help("Every connection this app has made")
+            .popover(
+                isPresented: $window.showsPrivacySummary,
+                arrowEdge: .top
+            ) {
+                PrivacySummary(ledger: model.ledger) {
+                    window.showsPrivacySummary = false
+                    window.showsPrivacy = true
+                }
+            }
         }
-        .font(.footnote)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Metrics.rowInset)
+        .padding(.vertical, 7)
+        .background(.bar)
     }
 
     private var engineSummary: String {
@@ -141,19 +250,81 @@ struct StatusBar: View {
     }
 }
 
-struct FailureView: View {
-    let message: String
-    let retry: () -> Void
+/// A control that looks like a label until you go near it.
+struct StatusBarButton: View {
+    let text: String
+    let symbol: String
+    var tint: Color = .secondary
+    let help: String
+    let action: () -> Void
+
+    @StateObject private var hover = HoverState()
+
+    final class HoverState: ObservableObject {
+        @Published var inside = false
+    }
 
     var body: some View {
-        VStack(spacing: 14) {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .foregroundStyle(tint)
+                Text(text)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.tertiary)
+                    .opacity(hover.inside ? 1 : 0)
+            }
+            .font(.footnote)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(hover.inside ? 0.07 : 0))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover.inside = $0 }
+        .help(help)
+    }
+}
+
+// MARK: - Failure
+
+/// What the app says when it could not finish.
+///
+/// The old version of this screen offered one button, "Try another document",
+/// which is advice rather than help: the document was rarely the problem. The
+/// two things that actually go wrong here are that no engine was ready and
+/// that one page defeated the readers, and both have somewhere to go.
+struct FailureView: View {
+    @ObservedObject var model: AppModel
+    let message: String
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 34))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.orange)
+            Text("The translation stopped")
+                .font(.title3.weight(.medium))
             Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            Button("Try another document", action: retry)
+                .textSelection(.enabled)
+                .frame(maxWidth: 440)
+            HStack(spacing: 10) {
+                Button("Start again") { model.reset() }
+                    .keyboardShortcut(.defaultAction)
+                if !model.canTranslate {
+                    Button("See what is missing") { openSettings() }
+                }
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)

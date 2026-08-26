@@ -150,19 +150,27 @@ public struct TranslatedBlock: Sendable, Identifiable {
     public let revision: String?
     public let findings: [IntegrityFinding]
     public let confidence: Confidence
+    /// How much of the page around this block the translator was shown, and
+    /// why. Kept because it is part of the app's working: a block translated
+    /// on its own and a block translated with its heading above it are two
+    /// different questions asked of the model, and the side-by-side export
+    /// says which one this was.
+    public let context: ContextNeed
 
     public init(
         source: ReconciledBlock,
         firstDraft: String,
         revision: String? = nil,
         findings: [IntegrityFinding] = [],
-        confidence: Confidence
+        confidence: Confidence,
+        context: ContextNeed = .none
     ) {
         self.source = source
         self.firstDraft = firstDraft
         self.revision = revision
         self.findings = findings
         self.confidence = confidence
+        self.context = context
     }
 
     /// What the export and the interface show.

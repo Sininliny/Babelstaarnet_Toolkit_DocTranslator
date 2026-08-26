@@ -74,7 +74,7 @@ public enum BlockAssembly {
     /// is small enough that a person checking a flagged block can find it on
     /// the page.
     ///
-    /// Babelstårnet arrived at the same unit from the other end — it
+    /// Babelstaarnet arrived at the same unit from the other end — it
     /// assembles a sentence *across* wrapped lines, because bridging a single
     /// visual line handed readers fragments that began after the subject and
     /// stopped before the verb.
@@ -339,7 +339,7 @@ public enum BlockAssembly {
 
     /// Whether two lines belong to the same run of text.
     ///
-    /// Taken from Babelstårnet, whose comment says it best: three things
+    /// Taken from Babelstaarnet, whose comment says it best: three things
     /// separate a wrapped line from the next thing on the page — a gap no
     /// wider than a line, a column the text shares, and type of the same
     /// size. The last one is what keeps a heading out of the paragraph

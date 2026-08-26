@@ -8,7 +8,7 @@ checkable three ways.
 ## 1. Translating cannot make a request
 
 Every engine that touches a document runs in this process or in macOS: Apple
-Vision reads the page, Læsesalen's own vision-language model reads it again on
+Vision reads the page, Laesesalen's own vision-language model reads it again on
 the Mac's GPU, and either that model or Apple's translates. None of them is a
 network service. With the optional model server off — which is how the app
 ships — translating a document opens no socket at all.
@@ -58,7 +58,7 @@ statement than any sentence in this file.
 
 Model weights, if you asked for them, and nothing else but what you save.
 
-Læsesalen's own vision model lives in
+Laesesalen's own vision model lives in
 `~/Library/Application Support/Laesesalen/Models` — not in your Documents
 folder, which is where the Hugging Face client puts downloads by default. The
 engines panel has a button to delete it, and deleting that folder by hand does
@@ -77,7 +77,7 @@ request either. That is checked too.
 
 Worth being plain about:
 
-- **Downloading a model is a download.** Læsesalen's own vision model comes
+- **Downloading a model is a download.** Laesesalen's own vision model comes
   from Hugging Face and macOS's translation model comes from Apple. Both are
   fetched once, on request, and neither carries any part of a document. The
   ledger records them as model downloads rather than as document traffic,
@@ -90,7 +90,7 @@ Worth being plain about:
   own requests went, and it says so.
 - **The optional model server is only as private as the server.** The app can
   only reach `127.0.0.1`, but what a program on your machine does with what it
-  receives is that program's business. If you point Læsesalen at something on
+  receives is that program's business. If you point Laesesalen at something on
   loopback that forwards elsewhere, the ledger will show the app's side of it
   and nothing more.
 - **Apple Intelligence is Apple's.** The on-device model runs on your Mac and

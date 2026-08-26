@@ -102,13 +102,21 @@ func runProfileChecks(_ report: Report) async {
     )
 
     report.begin("profile/context")
+    let after = TranslationContext(
+        previousSource: "甲方为北京安泰科技有限公司。",
+        previousTarget: "Party A is Beijing Antai Technology Co., Ltd."
+    )
+    let following = "该方应当在三十日内答复。"
     let prompt = AgentPrompts.translationPrompt(
-        text: "该方应当在三十日内答复。",
+        text: following,
         kind: .paragraph,
         documentContext: nil,
-        following: TranslationContext(
-            previousSource: "甲方为北京安泰科技有限公司。",
-            previousTarget: "Party A is Beijing Antai Technology Co., Ltd."
+        following: after,
+        need: AdaptiveContext.need(
+            for: following,
+            kind: .paragraph,
+            available: after,
+            language: SimplifiedChinese.language
         )
     )
     report.expect(
@@ -116,15 +124,19 @@ func runProfileChecks(_ report: Report) async {
         "the previous translation is carried forward, so a term stays itself"
     )
     report.expect(
-        prompt.contains("Translate only what follows"),
+        prompt.contains("Do not translate any of it"),
         "and the model is told which part to translate"
     )
     report.expect(
+        prompt.hasSuffix(following),
+        "with the block to translate last, where it cannot be mistaken"
+    )
+    report.expect(
         !AgentPrompts.translationPrompt(
-            text: "该方应当在三十日内答复。",
+            text: following,
             kind: .paragraph,
             documentContext: nil
-        ).contains("previous sentence"),
+        ).contains("The line before"),
         "with no context, nothing is invented"
     )
 

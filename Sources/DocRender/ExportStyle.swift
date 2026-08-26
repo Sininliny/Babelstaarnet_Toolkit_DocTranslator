@@ -25,6 +25,31 @@ public enum ExportStyle: String, Sendable, CaseIterable, Identifiable {
     var includesWorking: Bool { self == .audit }
 }
 
+/// The two file formats a styled export can be written as.
+///
+/// Distinct from `OutputMode`, which is what the reader chose before the run
+/// and is about *what the document is for*. This is only ever the container.
+public enum StyledFormat: String, Sendable, CaseIterable, Identifiable {
+    case markdown
+    case html
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .markdown: return "As Markdown…"
+        case .html: return "As a web page…"
+        }
+    }
+
+    public var fileExtension: String {
+        switch self {
+        case .markdown: return "md"
+        case .html: return "html"
+        }
+    }
+}
+
 extension TranslatedDocument {
     /// A line every export carries.
     ///
@@ -34,7 +59,7 @@ extension TranslatedDocument {
     /// gets treated as though a person made it.
     func provenance() -> [String] {
         var lines = [
-            "\(languages.displayName), translated on this Mac by Læsesalen.",
+            "\(languages.displayName), translated on this Mac by Laesesalen.",
             "Nothing in this document was uploaded anywhere."
         ]
         lines.append("Read by: " + engines.readers.joined(separator: ", "))
@@ -44,6 +69,17 @@ extension TranslatedDocument {
         // months later cannot infer it from the English.
         if !profile.summary.isEmpty {
             lines.append("Translated as: " + profile.summary)
+        }
+        // The names, in full. They are the part of this document that was
+        // recalled rather than derived: nothing in the source characters
+        // leads to "ibuprofen", and a reader who wants to check one has to be
+        // told which English word came from which name. Buried in a
+        // conversation with a model, that is unauditable; printed here, it is
+        // a line someone can query.
+        if !profile.names.isEmpty {
+            lines.append(
+                "Names looked up: " + profile.nameSummary.joined(separator: "; ")
+            )
         }
         if let translator = engines.translator {
             lines.append("Translated by: " + translator)

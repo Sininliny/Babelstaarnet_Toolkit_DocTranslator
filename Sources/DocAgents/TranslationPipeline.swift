@@ -76,7 +76,7 @@ public enum PipelineFailure: LocalizedError {
             return """
                 No translator is available. Turn on Apple Intelligence, \
                 download the Simplified Chinese translation model, or point \
-                Læsesalen at a local model server.
+                Laesesalen at a local model server.
                 """
         case .noReaders:
             return "No page reader is available."
@@ -128,6 +128,14 @@ public struct TranslationPipeline: Sendable {
         // of page four follows the one at the foot of page three, and a
         // translator told otherwise starts the document again twelve times.
         var context = TranslationContext.none
+        // The heading the blocks are currently under, in English, carried
+        // across page breaks for the same reason. A table that starts on page
+        // two has its column headings on page two and its last row on page
+        // three, and the row is no less under them for the page turn. Kept in
+        // the target language because it is handed to the translator as
+        // context, and context in the language being written cannot be
+        // mistaken for something to translate.
+        var sectionHeading: String?
 
         for index in 0..<source.pageCount {
             try Task.checkCancellation()
@@ -184,11 +192,46 @@ public struct TranslationPipeline: Sendable {
                     let questions = await ClarificationAgent(
                         languages: languages,
                         agent: agent
-                    ).questions(from: sample)
+                    ).questions(from: sample, profile: profile)
                     if !questions.isEmpty {
                         await onEvent(.asking(count: questions.count))
-                        brief.settledQuestions += await clarify(questions)
+                        let answers = await clarify(questions)
+                        brief.settledQuestions += answers
+                        // The one answer the app takes back for itself. The
+                        // rest of the brief is guidance for a model; the
+                        // field is a value the app's own checks read, and a
+                        // reader who has just said "this is a prescription"
+                        // should not have to say it again to the stage that
+                        // decides what the drug is called.
+                        if !profile.field.isKnown,
+                           let said = answers.first(
+                               where: { $0.question == DocumentField.question }
+                           ) {
+                            let field = DocumentField(describing: said.answer)
+                            if field.isKnown { profile.field = field }
+                        }
                     }
+                }
+
+                // And the names, last of all: after the profile, so the
+                // lookup happens in a field rather than in the abstract, and
+                // after the reader has answered, because what they said
+                // outranks what the app worked out. See `NameResolver` —
+                // this is the stage that keeps a prescription from saying
+                // "Buluofen".
+                //
+                // Checked for cancellation first, because the stage before
+                // this one is a dialog: a reader who answered the questions
+                // and then changed their mind should not wait out a model
+                // call they have already cancelled.
+                try Task.checkCancellation()
+                let names = await NameResolver(
+                    languages: languages,
+                    agent: agent
+                ).names(from: sample, profile: profile, brief: brief)
+                if !names.isEmpty {
+                    profile.names = names
+                    await onEvent(.readDocument(profile))
                 }
             }
 
@@ -200,16 +243,31 @@ public struct TranslationPipeline: Sendable {
             var translated: [TranslatedBlock] = []
             for (position, block) in blocks.enumerated() {
                 try Task.checkCancellation()
+                // What is around this block, offered rather than spent: the
+                // translator takes the parts this particular block turns out
+                // to need. The block after it is only ever the next one on
+                // this page — the page after has not been read yet, and
+                // reading ahead to give a translator one more sentence would
+                // double what a scan costs.
+                context.nextSource = blocks[(position + 1)...]
+                    .first { $0.kind.isTranslatable }?
+                    .text
+                context.sectionHeading = sectionHeading
                 let result = await translator.translate(
                     block,
                     following: context
                 )
                 translated.append(result)
+                // A heading governs what comes after it, not itself, so this
+                // is set once the heading has been translated.
+                if block.kind == .heading {
+                    sectionHeading = result.text.isEmpty
+                        ? block.text
+                        : result.text
+                }
                 if block.kind.isTranslatable {
-                    context = TranslationContext(
-                        previousSource: block.text,
-                        previousTarget: result.text
-                    )
+                    context.previousSource = block.text
+                    context.previousTarget = result.text
                 }
                 await onEvent(
                     .blockTranslated(

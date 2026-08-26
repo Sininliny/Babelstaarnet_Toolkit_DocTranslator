@@ -23,6 +23,7 @@ public struct IntegrityFinding: Sendable, Identifiable, Equatable {
         case leakedInstruction
         case briefIgnored
         case inconsistentTerm
+        case transliteratedName
     }
 
     public let id: UUID
@@ -227,6 +228,16 @@ public enum TextIntegrity {
             )
         }
 
+        findings.append(
+            contentsOf: transliterationFindings(
+                source: trimmedSource,
+                translation: trimmed,
+                language: language,
+                brief: brief,
+                profile: profile
+            )
+        )
+
         if let leak = instructionLeak(in: trimmed) {
             findings.append(
                 IntegrityFinding(
@@ -240,6 +251,150 @@ public enum TextIntegrity {
         }
 
         return findings
+    }
+
+    // MARK: - Names spelled out instead of looked up
+
+    /// The source's own characters, spelled out in Latin letters, found in
+    /// the English.
+    ///
+    /// This is the check the app gained when it was pointed at a
+    /// prescription. 布洛芬 is ibuprofen. A model translating one line at a
+    /// time will sometimes write "Buluofen" instead — the characters spelled
+    /// out syllable by syllable — and that answer is worse than a wrong
+    /// translation, because it is not a word. It names no drug, it cannot be
+    /// looked up, it is invisible to every other check here, and it sits in a
+    /// fluent English sentence that a reader who cannot read Chinese has no
+    /// way to doubt. The same failure turns 北京协和医院 into
+    /// "Beijingxieheyiyuan" and 《中华人民共和国合同法》 into a row of
+    /// syllables, and in each case there was an established name to be had.
+    ///
+    /// So the app spells the source out itself and looks for the result. If
+    /// the English contains a word that is exactly what the Chinese sounds
+    /// like, the translator transliterated where it should have looked up.
+    ///
+    /// **Three characters at least, and matched as a whole word.** This is
+    /// what keeps the check quiet. A private person's name is transliterated
+    /// and should be: 王小明 is "Wang Xiaoming", and no window of three
+    /// characters spells out as a single word there, because a name written
+    /// properly is written in parts. Two-character windows would fire on
+    /// every "Beijing" and "Shanghai" in the document, which are the correct
+    /// English and are exactly what the source sounds like.
+    ///
+    /// **A caution, not a failure.** Some names really are their own
+    /// romanization — 阿里巴巴 is "Alibaba" — and the app cannot tell those
+    /// from the ones with an English name it failed to find. Where the
+    /// document has already settled the name, that settlement wins and
+    /// nothing is reported: an app that flagged a block for using the
+    /// rendering it was told to use would be reporting its own instruction
+    /// back as a defect.
+    static func transliterationFindings(
+        source: String,
+        translation: String,
+        language: SourceLanguage,
+        brief: TranslationBrief,
+        profile: DocumentProfile
+    ) -> [IntegrityFinding] {
+        guard let romanization = language.romanization else { return [] }
+
+        // The words of the English, once. Everything below is a set lookup
+        // against this, so the cost of the check does not grow with the
+        // length of the block times the size of the window.
+        let words = Set(
+            translation
+                .lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .map(String.init)
+        )
+        guard !words.isEmpty else { return [] }
+
+        // The renderings this document has already agreed on, in the shape
+        // the windows are in. A name the app itself decided was "Alibaba" is
+        // not then reported for being Alibaba.
+        var agreed = Set<String>()
+        for name in profile.names { agreed.insert(letters(of: name.rendering)) }
+        for rendering in profile.terms.values {
+            agreed.insert(letters(of: rendering))
+        }
+        for term in brief.glossary {
+            agreed.insert(letters(of: term.requiredInTranslation))
+        }
+
+        // What the reader is being told to look for, in the words of the
+        // field: on a prescription the thing that is missing is a drug name,
+        // and saying so is the difference between a warning someone acts on
+        // and one they skim.
+        let established = profile.field == .medicine
+            ? "generic English drug"
+            : "English"
+
+        var findings: [IntegrityFinding] = []
+        for run in runs(of: romanization.characters, in: source) {
+            let syllables = romanization.syllables(run)
+            guard syllables.count == run.count else { continue }
+            let characters = Array(run)
+            var covered = Set<Int>()
+
+            // Longest first, so 头孢克肟 is reported once as itself rather
+            // than three times as its overlapping halves.
+            for size in stride(from: min(6, syllables.count), through: 3, by: -1) {
+                for start in 0...(syllables.count - size) {
+                    let span = start..<(start + size)
+                    guard covered.isDisjoint(with: span) else { continue }
+                    let spelled = syllables[span].joined()
+                    guard words.contains(spelled), !agreed.contains(spelled)
+                    else { continue }
+                    covered.formUnion(span)
+                    let name = String(characters[span])
+                    findings.append(
+                        IntegrityFinding(
+                            kind: .transliteratedName,
+                            severity: .caution,
+                            message: "“\(name)” is spelled out in "
+                                + "\(romanization.name) here. If it has an "
+                                + "established \(established) name, that is "
+                                + "what this should say.",
+                            evidence: asPrinted(spelled, in: translation)
+                        )
+                    )
+                    guard findings.count < 3 else { return findings }
+                }
+            }
+        }
+        return findings
+    }
+
+    /// The letters of a rendering, lower-cased and joined — "Wang Xiaoming"
+    /// and "wangxiaoming" compared as the same thing, because the windows
+    /// this is compared against have no spaces in them.
+    private static func letters(of text: String) -> String {
+        String(text.lowercased().filter(\.isLetter))
+    }
+
+    /// A word as the translation actually printed it, so the interface can
+    /// point at "Buluofen" rather than at "buluofen".
+    private static func asPrinted(_ word: String, in text: String) -> String {
+        guard let range = text.range(of: word, options: .caseInsensitive)
+        else { return word }
+        return String(text[range])
+    }
+
+    /// The runs of a script in a piece of text, which is what can be spelled
+    /// out. A run stops at the first character that is not the script's own —
+    /// a space, a digit, a full stop — because a name does not straddle one.
+    static func runs(of set: CharacterSet, in text: String) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        for character in text {
+            if character.unicodeScalars.allSatisfy(set.contains) {
+                current.append(character)
+            } else {
+                if current.count >= 3 { runs.append(current) }
+                current = ""
+            }
+        }
+        if current.count >= 3 { runs.append(current) }
+        return runs
     }
 
     // MARK: - Numbers

@@ -3,7 +3,7 @@ import Foundation
 /// Where one sentence stops and the next one starts, as data rather than as
 /// code.
 ///
-/// Ported from Babelstårnet, where it was learned the hard way: a period is a
+/// Ported from Babelstaarnet, where it was learned the hard way: a period is a
 /// weak signal. Ordinals carry one — "den 15. september" — dates and list
 /// numbers carry one, and a language may abbreviate heavily. Splitting on
 /// periods alone cuts sentences in half.

@@ -412,8 +412,24 @@ func runPipelineChecks(_ report: Report) async {
             }
         }
     )
-    report.equal(asked.value, 1, "the reader is asked the model's question")
+    // Two: the model's question, and the app's own. Nothing in this
+    // document says what field it belongs to, and the field decides what
+    // every name in it is called — so the app asks, ahead of anything a
+    // model thought of.
+    report.equal(
+        asked.value,
+        2,
+        "the reader is asked the model's question and the app's own"
+    )
     report.expect(answered != nil, "the run finishes after being answered")
+    // And the answer is taken back rather than only passed on. The clarify
+    // closure above picks the first option of every question, which for the
+    // field is medicine.
+    report.equal(
+        answered?.profile.field,
+        .medicine,
+        "answering the field question settles the field for the run"
+    )
 
     // A reader who is not asked still gets a translation.
     let unasked = try? await TranslationPipeline(
